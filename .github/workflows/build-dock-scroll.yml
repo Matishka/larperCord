@@ -1,0 +1,109 @@
+# Experimental larperCord Windows Dock wheel-scroll build. No Linux install needed on your PC.
+name: Build larperCord Dock Scroll for Windows
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-dock-scroll:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout larperCord source
+        uses: actions/checkout@v4
+
+      - name: Install Zig 0.17.1
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+
+      - name: Install build utilities
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y curl ca-certificates unzip zstd xz-utils tar git
+
+      - name: Apply experimental Cupertino Dock patch
+        shell: bash
+        run: |
+          base64 -d > /tmp/dock-wheel-scroll.patch <<'PATCH_B64'
+          LS0tIGEvc3JjL3VpL2NvbXBfcmFpbC56aWcKKysrIGIvc3JjL3VpL2NvbXBfcmFpbC56aWcKQEAg
+          LTUsMjAgKzUsNTEgQEAKICAgICBjb25zdCBvcmRlciA9IGZsYXRPcmRlcihjdHgsICZmYik7CiAg
+          ICAgY29uc3QgY291bnQgPSBvcmRlci5sZW4gKyAxOwogICAgIGNvbnN0IGdhcDogZjMyID0gMTA7
+          CiAgICAgY29uc3QgdG90YWwgPSBAYXMoZjMyLCBAZmxvYXRGcm9tSW50KGNvdW50KSkgKiAoYmFz
+          ZSArIGdhcCkgKyBnYXA7Ci0gICAgY29uc3QgeDAgPSByLnggKyAoci53IC0gdG90YWwpIC8gMjsK
+          LSAgICBjb25zdCBuZWFyID0gY3R4Lm1vdXNlLnkgPiByLnkgLSA2MCBhbmQgY3R4Lm1vdXNlLnkg
+          PCByLmJvdHRvbSgpIGFuZCBjdHgubW91c2UueCA+IHgwIC0gNDAgYW5kIGN0eC5tb3VzZS54IDwg
+          eDAgKyB0b3RhbCArIDQwOwotICAgIC8vIEZ1bmRvIGRlIHZpZHJvIGRvIGRvY2suCi0gICAgY29u
+          c3QgYmc6IGQuUmVjdCA9IC57IC54ID0geDAsIC55ID0gci5ib3R0b20oKSAtIGJhc2UgLSAxNiwg
+          LncgPSB0b3RhbCwgLmggPSBiYXNlICsgMTQgfTsKKyAgICAvLyBUaGUgRG9jayB1c2VkIHRvIGNl
+          bnRlciB0aGUgZnVsbCBjb250ZW50LCBldmVuIHdoZW4gaXQgd2FzIHdpZGVyIHRoYW4KKyAgICAv
+          LyB0aGUgc2NyZWVuOiB0aGUgZmlyc3QgYW5kIGxhc3QgZ3VpbGRzIGJlY2FtZSB1bnJlYWNoYWJs
+          ZS4gS2VlcCB0aGUKKyAgICAvLyBvcmlnaW5hbCBjZW50ZXJlZCBsYXlvdXQgd2hlbiBldmVyeXRo
+          aW5nIGZpdHMsIG90aGVyd2lzZSBzY3JvbGwgaXQuCisgICAgY29uc3QgYXZhaWxhYmxlID0gQG1h
+          eCgxLCByLncgLSAxNik7CisgICAgY29uc3Qgb3ZlcmZsb3cgPSB0b3RhbCA+IGF2YWlsYWJsZTsK
+          KyAgICBjb25zdCB2aWV3X3cgPSBAbWluKHRvdGFsLCBhdmFpbGFibGUpOworICAgIGNvbnN0IHgw
+          ID0gci54ICsgKHIudyAtIHZpZXdfdykgLyAyOworICAgIGNvbnN0IG1heF9zY3JvbGwgPSBAbWF4
+          KDAsIHRvdGFsIC0gdmlld193KTsKKyAgICBjdHguc3QuZG9ja19zY3JvbGwgPSBzdGQubWF0aC5j
+          bGFtcChjdHguc3QuZG9ja19zY3JvbGwsIDAsIG1heF9zY3JvbGwpOworICAgIGlmIChvdmVyZmxv
+          dyBhbmQgIWN0eC5zdC5zZXR0aW5ncy5vcGVuIGFuZCByLmNvbnRhaW5zKGN0eC5tb3VzZS54LCBj
+          dHgubW91c2UueSkpIHsKKyAgICAgICAgLy8gQSByZWd1bGFyIHZlcnRpY2FsIHdoZWVsIHNjcm9s
+          bHMgaG9yaXpvbnRhbGx5IG92ZXIgdGhlIERvY2suCisgICAgICAgIC8vIE1vdXNlV2hlZWxIIGFs
+          c28gc3VwcG9ydHMgdHJhY2twYWRzIGFuZCBTaGlmdCt3aGVlbC4KKyAgICAgICAgY29uc3Qgd2hl
+          ZWwgPSBpZiAoY3R4LmlvLiouTW91c2VXaGVlbEggIT0gMCkgY3R4LmlvLiouTW91c2VXaGVlbEgg
+          ZWxzZSBjdHguaW8uKi5Nb3VzZVdoZWVsOworICAgICAgICBjdHguc3QuZG9ja19zY3JvbGwgPSBz
+          dGQubWF0aC5jbGFtcChjdHguc3QuZG9ja19zY3JvbGwgLSB3aGVlbCAqIChiYXNlICsgZ2FwKSAq
+          IDIsIDAsIG1heF9zY3JvbGwpOworICAgIH0KKyAgICBjb25zdCBuZWFyID0gY3R4Lm1vdXNlLnkg
+          PiByLnkgLSA2MCBhbmQgY3R4Lm1vdXNlLnkgPCByLmJvdHRvbSgpIGFuZCBjdHgubW91c2UueCA+
+          IHgwIC0gNDAgYW5kIGN0eC5tb3VzZS54IDwgeDAgKyB2aWV3X3cgKyA0MDsKKyAgICAvLyBHbGFz
+          cyBiYWNrZ3JvdW5kIHN0YXlzIHdpdGhpbiB0aGUgd2luZG93OyBvbmx5IGljb25zIG1vdmUuCisg
+          ICAgY29uc3QgYmc6IGQuUmVjdCA9IC57IC54ID0geDAsIC55ID0gci5ib3R0b20oKSAtIGJhc2Ug
+          LSAxNiwgLncgPSB2aWV3X3csIC5oID0gYmFzZSArIDE0IH07CiAgICAgZC5zaGFkb3coY3R4LmRs
+          LCBiZywgMTgsIDE0LCBjdHguY29sKC5zaGFkb3cpKTsKICAgICBkLnJlY3QoY3R4LmRsLCBiZywg
+          Y3R4LmNvbCguZWxldmF0ZWQpLmFscGhhKDAuODUpLCAxOCk7CiAgICAgZC5ib3JkZXIoY3R4LmRs
+          LCBiZywgY3R4LmNvbCguYm9yZGVyKS5taXgoY3R4LmNvbCguYWNjZW50KSwgMC4zKSwgMTgsIDEp
+          OwogICAgIC8vIFBvciBjaW1hIGRlIHR1ZG8sIG1lbm9zIGRhcyBjb25maWd1cmHDp8O1ZXMgKHF1
+          ZSBjb2JyZW0gYSBqYW5lbGEpLgogICAgIGNvbnN0IGRsID0gaWYgKGN0eC5zdC5zZXR0aW5ncy5v
+          cGVuKSBjdHguZGwgZWxzZSBjdHguZmc7Ci0gICAgdmFyIHggPSB4MCArIGdhcDsKKyAgICAvLyBD
+          bGlwIGJvdGggaGl0LXRlc3RpbmcgYW5kIHRoZSBmb3JlZ3JvdW5kIGRyYXcgbGlzdC4gTWFnbmlm
+          aWVkIGljb25zCisgICAgLy8gbWF5IGV4dGVuZCBhYm92ZSB0aGUgYmFyLCBidXQgbXVzdCBuZXZl
+          ciBjb3ZlciBhZGphY2VudCBVSSBob3Jpem9udGFsbHkuCisgICAgaWYgKG92ZXJmbG93KSB7Cisg
+          ICAgICAgIGNvbnN0IGNsaXBfbWluID0gZC52KGJnLngsIHIueSAtIGJhc2UgKiAyKTsKKyAgICAg
+          ICAgY29uc3QgY2xpcF9tYXggPSBkLnYoYmcucmlnaHQoKSwgci5ib3R0b20oKSk7CisgICAgICAg
+          IGMuSW1HdWlfUHVzaENsaXBSZWN0KGNsaXBfbWluLCBjbGlwX21heCwgdHJ1ZSk7CisgICAgICAg
+          IGlmICghY3R4LnN0LnNldHRpbmdzLm9wZW4pIGMuSW1EcmF3TGlzdF9QdXNoQ2xpcFJlY3QoZGws
+          IGNsaXBfbWluLCBjbGlwX21heCwgdHJ1ZSk7CisgICAgfQorICAgIGRlZmVyIGlmIChvdmVyZmxv
+          dykgeworICAgICAgICBpZiAoIWN0eC5zdC5zZXR0aW5ncy5vcGVuKSBjLkltRHJhd0xpc3RfUG9w
+          Q2xpcFJlY3QoZGwpOworICAgICAgICBjLkltR3VpX1BvcENsaXBSZWN0KCk7CisgICAgfTsKKyAg
+          ICB2YXIgeCA9IHgwICsgZ2FwIC0gY3R4LnN0LmRvY2tfc2Nyb2xsOwogICAgIGZvciAoMC4uY291
+          bnQpIHxpfCB7CiAgICAgICAgIGNvbnN0IGN4ID0geCArIGJhc2UgLyAyOworICAgICAgICAvLyBP
+          ZmZzY3JlZW4gaWNvbnMgcmVxdWlyZSBuZWl0aGVyIGhpdCBib3hlcyBub3IgZHJhdyBjYWxscy4K
+          KyAgICAgICAgaWYgKG92ZXJmbG93IGFuZCAoY3ggKyBiYXNlICogMS43IDwgYmcueCBvciBjeCAt
+          IGJhc2UgKiAxLjcgPiBiZy5yaWdodCgpKSkgeworICAgICAgICAgICAgeCArPSBiYXNlICsgZ2Fw
+          OworICAgICAgICAgICAgY29udGludWU7CisgICAgICAgIH0KICAgICAgICAgY29uc3QgZGlzdCA9
+          IEBhYnMoY3R4Lm1vdXNlLnggLSBjeCk7CiAgICAgICAgIGNvbnN0IHRhcmdldDogZjMyID0gaWYg
+          KG5lYXIpIDEgKyAwLjY1ICogQG1heCgwLCAxIC0gZGlzdCAvIDE0MCkgZWxzZSAxOwogICAgICAg
+          ICBjb25zdCBrID0gYW5pbS50byhhbmltLmlkKCJkb2NrIiwgaSksIHRhcmdldCwgMjIpOwogICAg
+          ICAgICBjb25zdCBzaXplID0gYmFzZSAqIGs7Ci0tLSBhL3NyYy91aS9zdGF0ZS56aWcKKysrIGIv
+          c3JjL3VpL3N0YXRlLnppZwpAQCAtMjA0LDMgKzIwNCw1IEBACiAgICAgLy8vIFBhc3RhcyBkZSBz
+          ZXJ2aWRvcmVzIGFiZXJ0YXMgbmEgYmFycmEuCiAgICAgb3Blbl9mb2xkZXJzOiBzdGQuQXV0b0hh
+          c2hNYXBVbm1hbmFnZWQodTY0LCB2b2lkKSA9IC5lbXB0eSwKKyAgICAvLy8gSG9yaXpvbnRhbCBz
+          Y3JvbGwgb2Zmc2V0IG9mIHRoZSBDdXBlcnRpbm8gRG9jayAocGl4ZWxzKS4KKyAgICBkb2NrX3Nj
+          cm9sbDogZjMyID0gMCwKICAgICBpbnB1dDogWzIwMDBddTggPSBAc3BsYXQoMCksCg==
+          PATCH_B64
+          git apply --check /tmp/dock-wheel-scroll.patch
+          git apply /tmp/dock-wheel-scroll.patch
+
+      - name: Download Windows libraries
+        run: bash tools/windows_deps.sh
+
+      - name: Compile Windows app
+        run: zig build -Dtarget=x86_64-windows-gnu -Doptimize=ReleaseFast
+
+      - name: Upload build for download
+        uses: actions/upload-artifact@v4
+        with:
+          name: larperCord-Cupertino-Dock-scroll-Windows
+          path: zig-out/bin/*
+          if-no-files-found: error
