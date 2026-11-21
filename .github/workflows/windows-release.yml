@@ -1,0 +1,56 @@
+name: Windows release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, "portable/**"]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+
+      - name: Install build utilities
+        shell: pwsh
+        run: choco install unzip zstandard -y --no-progress
+
+      - uses: actions/cache@v4
+        with:
+          path: .deps/windows
+          key: windows-deps-${{ hashFiles('tools/windows_deps.sh') }}
+
+      - name: Download Windows libraries
+        shell: bash
+        run: bash tools/windows_deps.sh
+
+      - name: Compile Windows release
+        shell: bash
+        run: zig build -Dtarget=x86_64-windows-gnu -Doptimize=ReleaseFast -p out/win
+
+      - name: Package Windows release
+        shell: pwsh
+        run: |
+          $bin = Join-Path $PWD 'out\win\bin'
+          $rel = Join-Path $PWD 'rel'
+          $bundle = Join-Path $rel 'larperCord'
+          New-Item -ItemType Directory -Force $bundle | Out-Null
+          Copy-Item -Path (Join-Path $bin '*') -Destination $bundle -Recurse -Force
+          Compress-Archive -Path $bundle -DestinationPath (Join-Path $rel 'larpercord-windows-x86_64.zip') -Force
+          Get-ChildItem -Force $rel | Format-Table Name,Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: larpercord-windows-x86_64
+          path: rel/*
+          if-no-files-found: error
