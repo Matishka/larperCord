@@ -1,9 +1,16 @@
-
 # Windows-only build for the Cupertino Dock scroll implementation.
 name: Build larperCord Dock Scroll for Windows
 
 on:
   push:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-dock-scroll.yml'
+      - 'src/ui/comp_rail.zig'
+      - 'src/ui/state.zig'
+      - 'tools/windows_deps.sh'
+      - 'build.zig'
+  pull_request:
     branches: [main]
     paths:
       - '.github/workflows/build-dock-scroll.yml'
@@ -19,6 +26,7 @@ permissions:
 jobs:
   windows-dock-scroll:
     runs-on: windows-2025
+    timeout-minutes: 45
     steps:
       - name: Keep Zig source line endings
         shell: pwsh
@@ -36,6 +44,10 @@ jobs:
         shell: pwsh
         run: choco install unzip zstandard -y --no-progress
 
+      - uses: actions/cache@v4
+        with:
+          path: .deps/windows
+          key: windows-deps-${{ hashFiles('tools/windows_deps.sh') }}
 
       - name: Download Windows libraries
         shell: bash

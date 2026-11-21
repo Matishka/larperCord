@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Baixa as bibliotecas do build para Windows em .deps/windows (versões e hashes
-# fixos; hash errado para tudo). Compila a partir do Linux:
-#   tools/windows_deps.sh && zig build -Dtarget=x86_64-windows-gnu
+# fixos; hash errado para tudo). Pode rodar num Windows runner pelo Git Bash:
+#   bash tools/windows_deps.sh && zig build -Dtarget=x86_64-windows-gnu
 set -euo pipefail
 cd "$(dirname "$0")/.."
 out=.deps/windows
