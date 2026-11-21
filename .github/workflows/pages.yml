@@ -12,6 +12,8 @@ on:
       - "tools/gen_site.py"
       - "tools/web/**"
       - ".github/workflows/pages.yml"
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -44,6 +46,7 @@ jobs:
           path: docs
 
   deploy:
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: windows-2025
     permissions:
