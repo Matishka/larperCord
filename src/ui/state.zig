@@ -214,6 +214,8 @@ pub const State = struct {
     collapsed: std.AutoHashMapUnmanaged(Id, void) = .empty,
     /// Pastas de servidores abertas na barra.
     open_folders: std.AutoHashMapUnmanaged(u64, void) = .empty,
+    /// Horizontal scroll offset of the Cupertino Dock (pixels).
+    dock_scroll: f32 = 0,
     input: [2000]u8 = @splat(0),
     focus_input: bool = true,
     scroll: std.AutoHashMapUnmanaged(Id, Scroll) = .empty,
