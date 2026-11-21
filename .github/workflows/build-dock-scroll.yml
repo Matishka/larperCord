@@ -1,3 +1,4 @@
+
 # Dock wheel scroll v2: corrected hunk location for the current src/ui/comp_rail.zig. Experimental.
 name: Build larperCord Dock Scroll for Windows
 
@@ -9,8 +10,12 @@ permissions:
 
 jobs:
   windows-dock-scroll:
-    runs-on: ubuntu-24.04
+    runs-on: windows-2025
     steps:
+      - name: Keep Zig source line endings
+        shell: pwsh
+        run: git config --global core.autocrlf false
+
       - name: Checkout larperCord source
         uses: actions/checkout@v4
 
@@ -20,83 +25,87 @@ jobs:
           version: 0.17.1
 
       - name: Install build utilities
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y curl ca-certificates unzip zstd xz-utils tar git
+        shell: pwsh
+        run: choco install unzip -y --no-progress
 
       - name: Apply experimental Cupertino Dock patch
         shell: bash
         run: |
           base64 -d > /tmp/dock-wheel-scroll.patch <<'PATCH_B64'
-          LS0tIGEvc3JjL3VpL2NvbXBfcmFpbC56aWcKKysrIGIvc3JjL3VpL2NvbXBfcmFpbC56aWcKQEAgLTM5
-          MywyMCArMzkzLDUxIEBACiAgICAgY29uc3Qgb3JkZXIgPSBmbGF0T3JkZXIoY3R4LCAmZmIpOwogICAg
-          IGNvbnN0IGNvdW50ID0gb3JkZXIubGVuICsgMTsKICAgICBjb25zdCBnYXA6IGYzMiA9IDEwOwogICAg
-          IGNvbnN0IHRvdGFsID0gQGFzKGYzMiwgQGZsb2F0RnJvbUludChjb3VudCkpICogKGJhc2UgKyBnYXAp
-          ICsgZ2FwOwotICAgIGNvbnN0IHgwID0gci54ICsgKHIudyAtIHRvdGFsKSAvIDI7Ci0gICAgY29uc3Qg
-          bmVhciA9IGN0eC5tb3VzZS55ID4gci55IC0gNjAgYW5kIGN0eC5tb3VzZS55IDwgci5ib3R0b20oKSBh
-          bmQgY3R4Lm1vdXNlLnggPiB4MCAtIDQwIGFuZCBjdHgubW91c2UueCA8IHgwICsgdG90YWwgKyA0MDsK
-          LSAgICAvLyBGdW5kbyBkZSB2aWRybyBkbyBkb2NrLgotICAgIGNvbnN0IGJnOiBkLlJlY3QgPSAueyAu
-          eCA9IHgwLCAueSA9IHIuYm90dG9tKCkgLSBiYXNlIC0gMTYsIC53ID0gdG90YWwsIC5oID0gYmFzZSAr
-          IDE0IH07CisgICAgLy8gVGhlIERvY2sgdXNlZCB0byBjZW50ZXIgdGhlIGZ1bGwgY29udGVudCwgZXZl
-          biB3aGVuIGl0IHdhcyB3aWRlciB0aGFuCisgICAgLy8gdGhlIHNjcmVlbjogdGhlIGZpcnN0IGFuZCBs
-          YXN0IGd1aWxkcyBiZWNhbWUgdW5yZWFjaGFibGUuIEtlZXAgdGhlCisgICAgLy8gb3JpZ2luYWwgY2Vu
-          dGVyZWQgbGF5b3V0IHdoZW4gZXZlcnl0aGluZyBmaXRzLCBvdGhlcndpc2Ugc2Nyb2xsIGl0LgorICAg
-          IGNvbnN0IGF2YWlsYWJsZSA9IEBtYXgoMSwgci53IC0gMTYpOworICAgIGNvbnN0IG92ZXJmbG93ID0g
-          dG90YWwgPiBhdmFpbGFibGU7CisgICAgY29uc3Qgdmlld193ID0gQG1pbih0b3RhbCwgYXZhaWxhYmxl
-          KTsKKyAgICBjb25zdCB4MCA9IHIueCArIChyLncgLSB2aWV3X3cpIC8gMjsKKyAgICBjb25zdCBtYXhf
-          c2Nyb2xsID0gQG1heCgwLCB0b3RhbCAtIHZpZXdfdyk7CisgICAgY3R4LnN0LmRvY2tfc2Nyb2xsID0g
-          c3RkLm1hdGguY2xhbXAoY3R4LnN0LmRvY2tfc2Nyb2xsLCAwLCBtYXhfc2Nyb2xsKTsKKyAgICBpZiAo
-          b3ZlcmZsb3cgYW5kICFjdHguc3Quc2V0dGluZ3Mub3BlbiBhbmQgci5jb250YWlucyhjdHgubW91c2Uu
-          eCwgY3R4Lm1vdXNlLnkpKSB7CisgICAgICAgIC8vIEEgcmVndWxhciB2ZXJ0aWNhbCB3aGVlbCBzY3Jv
-          bGxzIGhvcml6b250YWxseSBvdmVyIHRoZSBEb2NrLgorICAgICAgICAvLyBNb3VzZVdoZWVsSCBhbHNv
-          IHN1cHBvcnRzIHRyYWNrcGFkcyBhbmQgU2hpZnQrd2hlZWwuCisgICAgICAgIGNvbnN0IHdoZWVsID0g
-          aWYgKGN0eC5pby4qLk1vdXNlV2hlZWxIICE9IDApIGN0eC5pby4qLk1vdXNlV2hlZWxIIGVsc2UgY3R4
-          LmlvLiouTW91c2VXaGVlbDsKKyAgICAgICAgY3R4LnN0LmRvY2tfc2Nyb2xsID0gc3RkLm1hdGguY2xh
-          bXAoY3R4LnN0LmRvY2tfc2Nyb2xsIC0gd2hlZWwgKiAoYmFzZSArIGdhcCkgKiAyLCAwLCBtYXhfc2Ny
-          b2xsKTsKKyAgICB9CisgICAgY29uc3QgbmVhciA9IGN0eC5tb3VzZS55ID4gci55IC0gNjAgYW5kIGN0
-          eC5tb3VzZS55IDwgci5ib3R0b20oKSBhbmQgY3R4Lm1vdXNlLnggPiB4MCAtIDQwIGFuZCBjdHgubW91
-          c2UueCA8IHgwICsgdmlld193ICsgNDA7CisgICAgLy8gR2xhc3MgYmFja2dyb3VuZCBzdGF5cyB3aXRo
-          aW4gdGhlIHdpbmRvdzsgb25seSBpY29ucyBtb3ZlLgorICAgIGNvbnN0IGJnOiBkLlJlY3QgPSAueyAu
-          eCA9IHgwLCAueSA9IHIuYm90dG9tKCkgLSBiYXNlIC0gMTYsIC53ID0gdmlld193LCAuaCA9IGJhc2Ug
-          KyAxNCB9OwogICAgIGQuc2hhZG93KGN0eC5kbCwgYmcsIDE4LCAxNCwgY3R4LmNvbCguc2hhZG93KSk7
-          CiAgICAgZC5yZWN0KGN0eC5kbCwgYmcsIGN0eC5jb2woLmVsZXZhdGVkKS5hbHBoYSgwLjg1KSwgMTgp
-          OwogICAgIGQuYm9yZGVyKGN0eC5kbCwgYmcsIGN0eC5jb2woLmJvcmRlcikubWl4KGN0eC5jb2woLmFj
-          Y2VudCksIDAuMyksIDE4LCAxKTsKICAgICAvLyBQb3IgY2ltYSBkZSB0dWRvLCBtZW5vcyBkYXMgY29u
-          ZmlndXJhw6fDtWVzIChxdWUgY29icmVtIGEgamFuZWxhKS4KICAgICBjb25zdCBkbCA9IGlmIChjdHgu
-          c3Quc2V0dGluZ3Mub3BlbikgY3R4LmRsIGVsc2UgY3R4LmZnOwotICAgIHZhciB4ID0geDAgKyBnYXA7
-          CisgICAgLy8gQ2xpcCBib3RoIGhpdC10ZXN0aW5nIGFuZCB0aGUgZm9yZWdyb3VuZCBkcmF3IGxpc3Qu
-          IE1hZ25pZmllZCBpY29ucworICAgIC8vIG1heSBleHRlbmQgYWJvdmUgdGhlIGJhciwgYnV0IG11c3Qg
-          bmV2ZXIgY292ZXIgYWRqYWNlbnQgVUkgaG9yaXpvbnRhbGx5LgorICAgIGlmIChvdmVyZmxvdykgewor
-          ICAgICAgICBjb25zdCBjbGlwX21pbiA9IGQudihiZy54LCByLnkgLSBiYXNlICogMik7CisgICAgICAg
-          IGNvbnN0IGNsaXBfbWF4ID0gZC52KGJnLnJpZ2h0KCksIHIuYm90dG9tKCkpOworICAgICAgICBjLklt
-          R3VpX1B1c2hDbGlwUmVjdChjbGlwX21pbiwgY2xpcF9tYXgsIHRydWUpOworICAgICAgICBpZiAoIWN0
-          eC5zdC5zZXR0aW5ncy5vcGVuKSBjLkltRHJhd0xpc3RfUHVzaENsaXBSZWN0KGRsLCBjbGlwX21pbiwg
-          Y2xpcF9tYXgsIHRydWUpOworICAgIH0KKyAgICBkZWZlciBpZiAob3ZlcmZsb3cpIHsKKyAgICAgICAg
-          aWYgKCFjdHguc3Quc2V0dGluZ3Mub3BlbikgYy5JbURyYXdMaXN0X1BvcENsaXBSZWN0KGRsKTsKKyAg
-          ICAgICAgYy5JbUd1aV9Qb3BDbGlwUmVjdCgpOworICAgIH07CisgICAgdmFyIHggPSB4MCArIGdhcCAt
-          IGN0eC5zdC5kb2NrX3Njcm9sbDsKICAgICBmb3IgKDAuLmNvdW50KSB8aXwgewogICAgICAgICBjb25z
-          dCBjeCA9IHggKyBiYXNlIC8gMjsKKyAgICAgICAgLy8gT2Zmc2NyZWVuIGljb25zIHJlcXVpcmUgbmVp
-          dGhlciBoaXQgYm94ZXMgbm9yIGRyYXcgY2FsbHMuCisgICAgICAgIGlmIChvdmVyZmxvdyBhbmQgKGN4
-          ICsgYmFzZSAqIDEuNyA8IGJnLnggb3IgY3ggLSBiYXNlICogMS43ID4gYmcucmlnaHQoKSkpIHsKKyAg
-          ICAgICAgICAgIHggKz0gYmFzZSArIGdhcDsKKyAgICAgICAgICAgIGNvbnRpbnVlOworICAgICAgICB9
-          CiAgICAgICAgIGNvbnN0IGRpc3QgPSBAYWJzKGN0eC5tb3VzZS54IC0gY3gpOwogICAgICAgICBjb25z
-          dCB0YXJnZXQ6IGYzMiA9IGlmIChuZWFyKSAxICsgMC42NSAqIEBtYXgoMCwgMSAtIGRpc3QgLyAxNDAp
-          IGVsc2UgMTsKICAgICAgICAgY29uc3QgayA9IGFuaW0udG8oYW5pbS5pZCgiZG9jayIsIGkpLCB0YXJn
-          ZXQsIDIyKTsKICAgICAgICAgY29uc3Qgc2l6ZSA9IGJhc2UgKiBrOwotLS0gYS9zcmMvdWkvc3RhdGUu
-          emlnCisrKyBiL3NyYy91aS9zdGF0ZS56aWcKQEAgLTIwNCwzICsyMDQsNSBAQAogICAgIC8vLyBQYXN0
-          YXMgZGUgc2Vydmlkb3JlcyBhYmVydGFzIG5hIGJhcnJhLgogICAgIG9wZW5fZm9sZGVyczogc3RkLkF1
-          dG9IYXNoTWFwVW5tYW5hZ2VkKHU2NCwgdm9pZCkgPSAuZW1wdHksCisgICAgLy8vIEhvcml6b250YWwg
-          c2Nyb2xsIG9mZnNldCBvZiB0aGUgQ3VwZXJ0aW5vIERvY2sgKHBpeGVscykuCisgICAgZG9ja19zY3Jv
-          bGw6IGYzMiA9IDAsCiAgICAgaW5wdXQ6IFsyMDAwXXU4ID0gQHNwbGF0KDApLAo=
+          LS0tIGEvc3JjL3VpL2NvbXBfcmFpbC56aWcKKysrIGIvc3JjL3VpL2NvbXBfcmFpbC56aWcKQEAg
+          LTM5MywyMCArMzkzLDUxIEBACiAgICAgY29uc3Qgb3JkZXIgPSBmbGF0T3JkZXIoY3R4LCAmZmIp
+          OwogICAgIGNvbnN0IGNvdW50ID0gb3JkZXIubGVuICsgMTsKICAgICBjb25zdCBnYXA6IGYzMiA9
+          IDEwOwogICAgIGNvbnN0IHRvdGFsID0gQGFzKGYzMiwgQGZsb2F0RnJvbUludChjb3VudCkpICog
+          KGJhc2UgKyBnYXApICsgZ2FwOwotICAgIGNvbnN0IHgwID0gci54ICsgKHIudyAtIHRvdGFsKSAv
+          IDI7Ci0gICAgY29uc3QgbmVhciA9IGN0eC5tb3VzZS55ID4gci55IC0gNjAgYW5kIGN0eC5tb3Vz
+          ZS55IDwgci5ib3R0b20oKSBhbmQgY3R4Lm1vdXNlLnggPiB4MCAtIDQwIGFuZCBjdHgubW91c2Uu
+          eCA8IHgwICsgdG90YWwgKyA0MDsKLSAgICAvLyBGdW5kbyBkZSB2aWRybyBkbyBkb2NrLgotICAg
+          IGNvbnN0IGJnOiBkLlJlY3QgPSAueyAueCA9IHgwLCAueSA9IHIuYm90dG9tKCkgLSBiYXNlIC0g
+          MTYsIC53ID0gdG90YWwsIC5oID0gYmFzZSArIDE0IH07CisgICAgLy8gVGhlIERvY2sgdXNlZCB0
+          byBjZW50ZXIgdGhlIGZ1bGwgY29udGVudCwgZXZlbiB3aGVuIGl0IHdhcyB3aWRlciB0aGFuCisg
+          ICAgLy8gdGhlIHNjcmVl bjogdGhlIGZpcnN0IGFuZCBsYXN0IGd1aWxkcyBiZWNhbWUgdW5yZWFj
+          aGFibGUuIEtlZXAgdGhlCisgICAgLy8gb3JpZ2luYWwgY2VudGVyZWQgbGF5b3V0IHdoZW4gZXZl
+          cnl0aGluZyBmaXRzLCBvdGhlcndpc2Ugc2Nyb2xsIGl0LgorICAgIGNvbnN0IGF2YWlsYWJsZSA9
+          IEBtYXgoMSwgci53IC0gMTYpOworICAgIGNvbnN0IG92ZXJmbG93ID0gdG90YWwgPiBhdmFpbGFi
+          bGU7CisgICAgY29uc3Qgdmlld193ID0gQG1pbih0b3RhbCwgYXZhaWxhYmxlKTsKKyAgICBjb25z
+          dCB4MCA9IHIueCArIChyLncgLSB2aWV3X3cpIC8gMjsKKyAgICBjb25zdCBtYXhfc2Nyb2xsID0g
+          QG1heCgwLCB0b3RhbCAtIHZpZXdfdyk7CisgICAgY3R4LnN0LmRvY2tfc2Nyb2xsID0gc3RkLm1h
+          dGguY2xhbXAoY3R4LnN0LmRvY2tfc2Nyb2xsLCAwLCBtYXhfc2Nyb2xsKTsKKyAgICBpZiAob3Zl
+          cmZsb3cgYW5kICFjdHguc3Quc2V0dGluZ3Mub3BlbiBhbmQgci5jb250YWlucyhjdHgubW91c2Uu
+          eCwgY3R4Lm1vdXNlLnkpKSB7CisgICAgICAgIC8vIEEgcmVndWxhciB2ZXJ0aWNhbCB3aGVlbCBz
+          Y3JvbGxzIGhvcml6b250YWxseSBvdmVyIHRoZSBEb2NrLgorICAgICAgICAvLyBNb3VzZVdoZWVs
+          SCBhbHNvIHN1cHBvcnRzIHRyYWNrcGFkcyBhbmQgU2hpZnQrd2hlZWwuCisgICAgICAgIGNvbnN0
+          IHdoZWVsID0gaWYgKGN0eC5pby4qLk1vdXNlV2hlZWxIICE9IDApIGN0eC5pby4qLk1vdXNlV2hl
+          ZWxIIGVsc2UgY3R4LmlvLiouTW91c2VXaGVlbDsKKyAgICAgICAgY3R4LnN0LmRvY2tfc2Nyb2xs
+          ID0gc3RkLm1hdGguY2xhbXAoY3R4LnN0LmRvY2tfc2Nyb2xsIC0gd2hlZWwgKiAoYmFzZSArIGdh
+          cCkgKiAyLCAwLCBtYXhfc2Nyb2xsKTsKKyAgICB9CisgICAgY29uc3QgbmVhciA9IGN0eC5tb3Vz
+          ZS55ID4gci55IC0gNjAgYW5kIGN0eC5tb3VzZS55IDwgci5ib3R0b20oKSBhbmQgY3R4Lm1vdXNl
+          LnggPiB4MCAtIDQwIGFuZCBjdHgubW91c2UueCA8IHgwICsgdmlld193ICsgNDA7CisgICAgLy8g
+          R2xhc3MgYmFja2dyb3VuZCBzdGF5cyB3aXRoaW4gdGhlIHdpbmRvdzsgb25seSBpY29ucyBtb3Zl
+          LgorICAgIGNvbnN0IGJnOiBkLlJlY3QgPSAueyAueCA9IHgwLCAueSA9IHIuYm90dG9tKCkgLSBi
+          YXNlIC0gMTYsIC53ID0gdmlld193LCAuaCA9IGJhc2UgKyAxNCB9OwogICAgIGQuc2hhZG93KGN0
+          eC5kbCwgYmcsIDE4LCAxNCwgY3R4LmNvbCguc2hhZG93KSk7CiAgICAgZC5yZWN0KGN0eC5kbCwg
+          YmcsIGN0eC5jb2woLmVsZXZhdGVkKS5hbHBoYSgwLjg1KSwgMTgpOwogICAgIGQuYm9yZGVyKGN0
+          eC5kbCwgYmcsIGN0eC5jb2woLmJvcmRlcikubWl4KGN0eC5jb2woLmFjY2VudCksIDAuMyksIDE4
+          LCAxKTsKICAgICAvLyBQb3IgY2ltYSBkZSB0dWRvLCBtZW5vcyBkYXMgY29uZmlndXJhw6fDtWVz
+          IChxdWUgY29icmVtIGEgamFuZWxhKS4KICAgICBjb25zdCBkbCA9IGlmIChjdHguc3Quc2V0dGlu
+          Z3Mub3BlbikgY3R4LmRsIGVsc2UgY3R4LmZnOwotICAgIHZhciB4ID0geDAgKyBnYXA7CisgICAg
+          Ly8gQ2xpcCBib3RoIGhpdC10ZXN0aW5nIGFuZCB0aGUgZm9yZWdyb3VuZCBkcmF3IGxpc3QuIE1h
+          Z25pZmllZCBpY29ucworICAgIC8vIG1heSBleHRlbmQgYWJvdmUgdGhlIGJhciwgYnV0IG11c3Qg
+          bmV2ZXIgY292ZXIgYWRqYWNlbnQgVUkgaG9yaXpvbnRhbGx5LgorICAgIGlmIChvdmVyZmxvdykg
+          eworICAgICAgICBjb25zdCBjbGlwX21pbiA9IGQudihiZy54LCByLnkgLSBiYXNlICogMik7Cisg
+          ICAgICAgIGNvbnN0IGNsaXBfbWF4ID0gZC52KGJnLnJpZ2h0KCksIHIuYm90dG9tKCkpOworICAg
+          ICAgICBjLkltR3VpX1B1c2hDbGlwUmVjdChjbGlwX21pbiwgY2xpcF9tYXgsIHRydWUpOworICAg
+          ICAgICBpZiAoIWN0eC5zdC5zZXR0aW5ncy5vcGVuKSBjLkltRHJhd0xpc3RfUHVzaENsaXBSZWN0
+          KGRsLCBjbGlwX21pbiwgY2xpcF9tYXgsIHRydWUpOworICAgIH0KKyAgICBkZWZlciBpZiAob3Zl
+          cmZsb3cpIHsKKyAgICAgICAgaWYgKCFjdHguc3Quc2V0dGluZ3Mub3BlbikgYy5JbURyYXdMaXN0
+          X1BvcENsaXBSZWN0KGRsKTsKKyAgICAgICAgYy5JbUd1aV9Qb3BDbGlwUmVjdCgpOworICAgIH07
+          CisgICAgdmFyIHggPSB4MCArIGdhcCAtIGN0eC5zdC5kb2NrX3Njcm9sbDsKICAgICBmb3IgKDAu
+          LmNvdW50KSB8aXwgewogICAgICAgICBjb25zdCBjeCA9IHggKyBiYXNlIC8gMjsKKyAgICAgICAg
+          Ly8gT2Zmc2NyZWVuIGljb25zIHJlcXVpcmUgbmVpdGhlciBoaXQgYm94ZXMgbm9yIGRyYXcgY2Fs
+          bHMuCisgICAgICAgIGlmIChvdmVyZmxvdyBhbmQgKGN4ICsgYmFzZSAqIDEuNyA8IGJnLnggb3Ig
+          Y3ggLSBiYXNlICogMS43ID4gYmcucmlnaHQoKSkpIHsKKyAgICAgICAgICAgIHggKz0gYmFzZSAr
+          IGdhcDsKKyAgICAgICAgICAgIGNvbnRpbnVlOworICAgICAgICB9CiAgICAgICAgIGNvbnN0IGRp
+          c3QgPSBAYWJzKGN0eC5tb3VzZS54IC0gY3gpOwogICAgICAgICBjb25zdCB0YXJnZXQ6IGYzMiA9
+          IGlmIChuZWFyKSAxICsgMC42NSAqIEBtYXgoMCwgMSAtIGRpc3QgLyAxNDApIGVsc2UgMTsKICAg
+          ICAgICAgY29uc3QgayA9IGFuaW0udG8oYW5pbS5pZCgiZG9jayIsIGkpLCB0YXJnZXQsIDIyKTsK
+          ICAgICAgICAgY29uc3Qgc2l6ZSA9IGJhc2UgKiBrOwotLS0gYS9zcmMvdWkvc3RhdGUuemlnCisr
+          KyBiL3NyYy91aS9zdGF0ZS56aWcKQEAgLTIwNCwzICsyMDQsNSBAQAogICAgIC8vLyBQYXN0YXMg
+          ZGUgc2Vydmlkb3JlcyBhYmVydGFzIG5hIGJhcnJhLgogICAgIG9wZW5fZm9sZGVyczogc3RkLkF1
+          dG9IYXNoTWFwVW5tYW5hZ2VkKHU2NCwgdm9pZCkgPSAuZW1wdHksCisgICAgLy8vIEhvcml6b250
+          YWwgc2Nyb2xsIG9mZnNldCBvZiB0aGUgQ3VwZXJ0aW5vIERvY2sgKHBpeGVscykuCisgICAgZG9j
+          a19zY3JvbGw6IGYzMiA9IDAsCiAgICAgaW5wdXQ6IFsyMDAwXXU4ID0gQHNwbGF0KDApLAo=
           PATCH_B64
           grep -n '^@@ ' /tmp/dock-wheel-scroll.patch
           git apply --check /tmp/dock-wheel-scroll.patch
           git apply /tmp/dock-wheel-scroll.patch
 
       - name: Download Windows libraries
+        shell: bash
         run: bash tools/windows_deps.sh
 
       - name: Compile Windows app
+        shell: bash
         run: zig build -Dtarget=x86_64-windows-gnu -Doptimize=ReleaseFast
 
       - name: Upload build for download
