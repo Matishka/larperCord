@@ -417,19 +417,46 @@ fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
     const count = order.len + 1;
     const gap: f32 = 10;
     const total = @as(f32, @floatFromInt(count)) * (base + gap) + gap;
-    const x0 = r.x + (r.w - total) / 2;
-    const near = ctx.mouse.y > r.y - 60 and ctx.mouse.y < r.bottom() and ctx.mouse.x > x0 - 40 and ctx.mouse.x < x0 + total + 40;
-    // Fundo de vidro do dock.
-    const bg: d.Rect = .{ .x = x0, .y = r.bottom() - base - 16, .w = total, .h = base + 14 };
+    // Keep the Dock centered when it fits; otherwise make its contents scrollable.
+    const available = @max(1, r.w - 16);
+    const overflow = total > available;
+    const view_w = @min(total, available);
+    const x0 = r.x + (r.w - view_w) / 2;
+    const max_scroll = @max(0, total - view_w);
+    ctx.st.dock_scroll = std.math.clamp(ctx.st.dock_scroll, 0, max_scroll);
+    if (overflow and !ctx.st.settings.open and r.contains(ctx.mouse.x, ctx.mouse.y)) {
+        // A vertical wheel scrolls horizontally; horizontal wheels/trackpads work too.
+        const wheel = if (ctx.io.*.MouseWheelH != 0) ctx.io.*.MouseWheelH else ctx.io.*.MouseWheel;
+        ctx.st.dock_scroll = std.math.clamp(ctx.st.dock_scroll - wheel * (base + gap) * 2, 0, max_scroll);
+    }
+    const near = ctx.mouse.y > r.y - 60 and ctx.mouse.y < r.bottom() and ctx.mouse.x > x0 - 40 and ctx.mouse.x < x0 + view_w + 40;
+    // Keep the glass background inside the window while the icons scroll.
+    const bg: d.Rect = .{ .x = x0, .y = r.bottom() - base - 16, .w = view_w, .h = base + 14 };
     d.shadow(ctx.dl, bg, 18, 14, ctx.col(.shadow));
     d.rect(ctx.dl, bg, ctx.col(.elevated).alpha(0.85), 18);
     d.border(ctx.dl, bg, ctx.col(.border).mix(ctx.col(.accent), 0.3), 18, 1);
 
     // Por cima de tudo, menos das configurações (que cobrem a janela).
     const dl = if (ctx.st.settings.open) ctx.dl else ctx.fg;
-    var x = x0 + gap;
+    // Clip hit-testing and drawing to the visible Dock area.
+    if (overflow) {
+        const clip_min = d.v(bg.x, r.y - base * 2);
+        const clip_max = d.v(bg.right(), r.bottom());
+        c.ImGui_PushClipRect(clip_min, clip_max, true);
+        if (!ctx.st.settings.open) c.ImDrawList_PushClipRect(dl, clip_min, clip_max, true);
+    }
+    defer if (overflow) {
+        if (!ctx.st.settings.open) c.ImDrawList_PopClipRect(dl);
+        c.ImGui_PopClipRect();
+    };
+    var x = x0 + gap - ctx.st.dock_scroll;
     for (0..count) |i| {
         const cx = x + base / 2;
+        // Off-screen icons need neither hit boxes nor draw calls.
+        if (overflow and (cx + base * 1.7 < bg.x or cx - base * 1.7 > bg.right())) {
+            x += base + gap;
+            continue;
+        }
         const dist = @abs(ctx.mouse.x - cx);
         const target: f32 = if (near) 1 + 0.65 * @max(0, 1 - dist / 140) else 1;
         const k = anim.to(anim.id("dock", i), target, 22);
