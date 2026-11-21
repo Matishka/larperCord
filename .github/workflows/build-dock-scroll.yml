@@ -1,4 +1,3 @@
-
 # Windows-only build for the Cupertino Dock scroll implementation.
 name: Build larperCord Dock Scroll for Windows
 
@@ -36,18 +35,56 @@ jobs:
         shell: pwsh
         run: choco install unzip zstandard -y --no-progress
 
+      - name: Run Zig unit tests on Windows
+        shell: pwsh
+        run: zig build test
 
       - name: Download Windows libraries
-        shell: bash
+        shell: pwsh
         run: bash tools/windows_deps.sh
 
       - name: Compile Windows app
-        shell: bash
+        shell: pwsh
         run: zig build -Dtarget=x86_64-windows-gnu -Doptimize=ReleaseFast
 
-      - name: Upload build for download
+      - name: Prepare Windows package
+        shell: pwsh
+        run: |
+          $dist = Join-Path $PWD 'dist'
+          New-Item -ItemType Directory -Force $dist | Out-Null
+          Copy-Item -Path 'zig-out\bin\*' -Destination $dist -Force
+
+          $required = @('larpercord.exe', 'SDL3.dll', 'libcurl-x64.dll', 'libcrypto-3-x64.dll')
+          foreach ($file in $required) {
+            if (-not (Test-Path (Join-Path $dist $file))) {
+              throw "Required Windows build file is missing: $file"
+            }
+          }
+
+          @'
+          larperCord — Windows x64
+
+          1. Extract all files from this package into one folder.
+          2. Keep larpercord.exe and all DLL files together.
+          3. Run larpercord.exe.
+
+          The Cupertino Dock horizontal scrolling change is included.
+          SHA256SUMS contains hashes for the executable and DLL files.
+          '@ | Set-Content -Path (Join-Path $dist 'README-Windows.txt') -Encoding utf8
+
+          $checksums = Get-ChildItem $dist -File |
+            Where-Object { $_.Extension -in @('.exe', '.dll') } |
+            Sort-Object Name |
+            ForEach-Object {
+              $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              "$hash  $($_.Name)"
+            }
+          $checksums | Set-Content -Path (Join-Path $dist 'SHA256SUMS') -Encoding ascii
+
+      - name: Upload Windows package
         uses: actions/upload-artifact@v4
         with:
           name: larperCord-Cupertino-Dock-scroll-Windows
-          path: zig-out/bin/*
+          path: dist/
           if-no-files-found: error
+          retention-days: 14
