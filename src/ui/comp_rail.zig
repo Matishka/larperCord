@@ -411,16 +411,26 @@ fn textTabs(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     c.ImGui_Dummy(d.v(1, @max(1, r.h - 6)));
 }
 
+// Folder IDs are opaque Discord identifiers, not secrets. SDL's monotonic
+// nanosecond clock gives us a collision-resistant starting point without relying
+// on the pre-0.16 std.crypto.random API.
+var last_dock_folder_id: u64 = 0;
+
 fn nextDockFolderId(ctx: *const d.Ctx) u64 {
-    var id = (std.crypto.random.int(u64) & 0x7fff_ffff_ffff_ffff) | 1;
+    var id = c.SDL_GetTicksNS() & 0x7fff_ffff_ffff_ffff;
+    if (id == 0) id = 1;
+    if (id <= last_dock_folder_id) id = last_dock_folder_id +% 1;
     while (true) {
         var used = false;
         for (ctx.store.folders) |f| if (f.id == id) {
             used = true;
             break;
         };
-        if (!used) return id;
-        id +%= 2;
+        if (!used) {
+            last_dock_folder_id = id;
+            return id;
+        }
+        id +%= 1;
     }
 }
 

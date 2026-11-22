@@ -1195,7 +1195,7 @@ pub const Gateway = struct {
 
     /// Passa as pastas para o Store (só se vieram: uma atualização parcial
     /// sem pastas não apaga as que já temos).
-    fn emitFolderList(g: *Gateway, folders: []const types.GuildFolder) void {
+    fn emitFolderList(g: *Gateway, folders: anytype) void {
         if (folders.len == 0) {
             g.emit(.{ .guild_folders = &.{} });
             return;
