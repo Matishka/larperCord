@@ -463,6 +463,32 @@ fn beginDockDrag(ctx: *d.Ctx, kind: DockDragKind, id: u64, folder_id: u64, hb: d
     }
 }
 
+fn dockGuildPlace(mouse_x: f32, cx: f32, size: f32) guild_layout.Place {
+    // Only the central 30% creates a folder. Edges sort before/after.
+    return if (@abs(mouse_x - cx) <= size * 0.15)
+        .inside
+    else if (mouse_x < cx)
+        .before
+    else
+        .after;
+}
+
+fn dockDropHint(ctx: *d.Ctx, dl: *c.ImDrawList, rect: d.Rect, place: guild_layout.Place) void {
+    const accent = ctx.col(.accent);
+    switch (place) {
+        .inside => d.border(dl, .{
+            .x = rect.x - 3, .y = rect.y - 3,
+            .w = rect.w + 6, .h = rect.h + 6,
+        }, accent, 11, 2.5),
+        .before, .after => {
+            const edge_x = if (place == .before) rect.x - 5 else rect.right() + 2;
+            d.rect(dl, .{
+                .x = edge_x, .y = rect.y - 4, .w = 3, .h = rect.h + 8,
+            }, accent, 1.5);
+        },
+    }
+}
+
 fn dropDockItem(ctx: *d.Ctx, target: guild_layout.Target, cx: f32, size: f32) void {
     const drag = ctx.st.dock_drag orelse return;
     if (!drag.moved) return;
@@ -470,7 +496,7 @@ fn dropDockItem(ctx: *d.Ctx, target: guild_layout.Target, cx: f32, size: f32) vo
         .guild => {
             const place: guild_layout.Place = switch (target) {
                 .folder => .inside,
-                .guild => if (@abs(ctx.mouse.x - cx) <= size * 0.22) .inside else if (ctx.mouse.x < cx) .before else .after,
+                .guild => dockGuildPlace(ctx.mouse.x, cx, size),
             };
             var new_id: u64 = 0;
             if (place == .inside) switch (target) {
@@ -658,7 +684,10 @@ fn folderPopover(
     d.circle(dl, more.x + 16, more.y + 16, 1.7, dots_color);
     d.circle(dl, more.x + 22, more.y + 16, 1.7, dots_color);
     if (more_hb.clicked) folderContextMenu(ctx, panel, .guild_folder, f.id);
-    if (more_hb.hovered) folderTooltip(ctx, dl, panel, i18n.tr("Opções da pasta", "Folder options"));
+    var hovered_name: ?[]const u8 = if (more_hb.hovered and ctx.st.popup == .none)
+        i18n.tr("Opções da pasta", "Folder options")
+    else
+        null;
 
     d.line(dl, panel.x + 18, panel.y + header_h - 1, panel.right() - 18, panel.y + header_h - 1, ctx.col(.border).alpha(0.8), 1);
 
@@ -687,28 +716,38 @@ fn folderPopover(
         glyph(ctx, dl, g, ix + tile / 2, iy + tile / 2, tile, shape, ctx.st.guild == gid or hb.hovered);
         if (g.mentions > 0) badge(ctx, dl, ir.right() + 2, ir.y - 2, g.mentions);
         if (ctx.st.guild == gid) d.circle(dl, ix + tile / 2, ir.bottom() + 3, 2.2, folder_color);
-        if (hb.hovered) folderTooltip(ctx, dl, panel, g.name);
+        if (hb.hovered and ctx.st.popup == .none and ctx.st.dock_drag == null) hovered_name = g.name;
+        if (ctx.st.dock_drag) |drag| {
+            if (drag.moved and !(drag.kind == .guild and drag.id == gid) and
+                ir.contains(ctx.mouse.x, ctx.mouse.y))
+            {
+                dockDropHint(ctx, dl, ir, if (drag.kind == .guild)
+                    dockGuildPlace(ctx.mouse.x, ix + tile / 2, tile)
+                else
+                    .after);
+            }
+        }
     }
+    // Draw once after ALL icons, in the reserved footer. A tooltip must never
+    // appear behind a neighboring server or steal a click from an icon.
+    if (hovered_name) |label| folderTooltip(ctx, dl, panel, label);
 }
 
 fn folderTooltip(ctx: *d.Ctx, dl: *c.ImDrawList, panel: d.Rect, label: []const u8) void {
     const fs: f32 = 13;
     const font = ctx.ui.get(.semibold);
-    const text_w = @min(d.width(font, fs, label), @max(48.0, panel.w - 48));
-    const tip_w = text_w + 20;
-    const tip_h: f32 = 30;
-    const min_x = panel.x + 10;
-    const max_x = @max(min_x, panel.right() - tip_w - 10);
-    const tip_x = std.math.clamp(ctx.mouse.x + 14, min_x, max_x);
-    const min_y = panel.y + 64;
-    const max_y = @max(min_y, panel.bottom() - tip_h - 10);
-    const above = ctx.mouse.y - tip_h - 10;
-    const tip_y = if (above >= min_y) above else @min(max_y, ctx.mouse.y + 14);
-    const tip: d.Rect = .{ .x = tip_x, .y = tip_y, .w = tip_w, .h = tip_h };
-    d.shadow(dl, tip, 7, 9, ctx.col(.shadow));
+    const text_w = @min(d.width(font, fs, label), @max(48.0, panel.w - 52));
+    const tip_w = text_w + 24;
+    const tip: d.Rect = .{
+        .x = panel.x + (panel.w - tip_w) / 2,
+        .y = panel.bottom() - 36,
+        .w = tip_w,
+        .h = 28,
+    };
+    d.shadow(dl, tip, 7, 7, ctx.col(.shadow));
     d.rect(dl, tip, ctx.col(.sidebar), 7);
     d.border(dl, tip, ctx.col(.border).mix(ctx.col(.text), 0.18), 7, 1);
-    _ = d.textClipped(dl, font, fs, tip.x + 10, tip.y + 7.5, ctx.col(.text), label, text_w);
+    _ = d.textClipped(dl, font, fs, tip.x + 12, tip.y + 6, ctx.col(.text), label, text_w);
 }
 
 /// Dock no estilo do macOS: os ícones crescem perto do mouse; pastas e servidores
@@ -786,6 +825,16 @@ fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
                 glyph(ctx, dl, g, cx, ir.y + size / 2, size, shape, true);
                 if (g.mentions > 0) badge(ctx, dl, ir.right() + 2, ir.y - 2, g.mentions);
                 if (ctx.st.guild == g.id) d.circle(dl, cx, bg.bottom() - 3, 2.5, ctx.col(.accent));
+                if (ctx.st.dock_drag) |drag| {
+                    if (drag.moved and !(drag.kind == .guild and drag.id == g.id) and
+                        ir.contains(ctx.mouse.x, ctx.mouse.y))
+                    {
+                        dockDropHint(ctx, dl, ir, if (drag.kind == .guild)
+                            dockGuildPlace(ctx.mouse.x, cx, size)
+                        else
+                            if (ctx.mouse.x < cx) .before else .after);
+                    }
+                }
                 if (hb.hovered) tooltip(ctx, 3000 + i, ir.right() + 12, ir.y + size / 2, g.name, true);
             },
             .folder => |f| {
@@ -807,6 +856,18 @@ fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
                     break;
                 };
                 dockFolderIcon(ctx, dl, f, ir, shape, selected);
+                if (ctx.st.dock_drag) |drag| {
+                    if (drag.moved and !(drag.kind == .folder and drag.id == f.id) and
+                        ir.contains(ctx.mouse.x, ctx.mouse.y))
+                    {
+                        dockDropHint(ctx, dl, ir, if (drag.kind == .guild)
+                            .inside
+                        else if (ctx.mouse.x < cx)
+                            .before
+                        else
+                            .after);
+                    }
+                }
                 const label = if (f.name.len > 0) f.name else i18n.tr("Pasta", "Folder");
                 if (hb.hovered) tooltip(ctx, @truncate(f.id *% 13 +% 7000), ir.right() + 12, ir.y + size / 2, label, true);
                 if ((ctx.st.open_folders.contains(f.id) or popupBelongsToFolder(ctx, f)) and open_folder == null) {
