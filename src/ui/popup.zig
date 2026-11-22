@@ -578,6 +578,9 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
     const quick_h: f32 = if (kind == .message) 46 else 0;
     // "Cor do servidor": uma fileira de cores no fim do menu do servidor.
     const colors_h: f32 = if ((kind == .guild and ctx.store.guild(id) != null) or (kind == .guild_folder and folderExists(ctx, id))) 62 else 0;
+    // Large server menus can reach the bottom of the screen. Put the color
+    // palette first so it is always visible instead of hiding below the Dock.
+    const colors_first = kind == .guild and colors_h > 0;
     var seps: f32 = 0;
     for (items[0..n]) |it| {
         if (it.sep) seps += 9;
@@ -629,6 +632,10 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
         ctx.dl = idl;
         yy = c.ImGui_GetCursorScreenPos().y;
     }
+    if (colors_first) {
+        guildColors(ctx, idl, id, r, yy);
+        yy += colors_h;
+    }
     var picked: ?u8 = null;
     for (items[0..n], 0..) |it, i| {
         if (it.sep) {
@@ -666,9 +673,7 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
     }
     var chosen_account = false;
     if (picked == null) {
-        if (colors_h > 0) {
-            if (kind == .guild) guildColors(ctx, idl, id, r, yy) else if (kind == .guild_folder) guildFolderColors(ctx, idl, id, r, yy);
-        }
+        if (kind == .guild_folder and colors_h > 0) guildFolderColors(ctx, idl, id, r, yy);
         if (kind == .status and accounts_menu.draw(ctx, idl, r, yy)) chosen_account = true;
     }
     if (scrolls) {
