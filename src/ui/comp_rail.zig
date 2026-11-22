@@ -424,13 +424,13 @@ fn nextDockFolderId(ctx: *const d.Ctx) u64 {
     }
 }
 
-fn beginDockDrag(ctx: *d.Ctx, kind: DockDragKind, id: u64, folder: u64, hb: d.Hit) void {
+fn beginDockDrag(ctx: *d.Ctx, kind: DockDragKind, id: u64, folder_id: u64, hb: d.Hit) void {
     if (!hb.held or ctx.st.settings.open) return;
     if (ctx.st.dock_drag == null) {
-        ctx.st.dock_drag = .{ .kind = kind, .id = id, .folder = folder, .start_x = ctx.mouse.x, .start_y = ctx.mouse.y };
+        ctx.st.dock_drag = .{ .kind = kind, .id = id, .folder = folder_id, .start_x = ctx.mouse.x, .start_y = ctx.mouse.y };
     }
     if (ctx.st.dock_drag) |*drag| {
-        if (drag.kind == kind and drag.id == id and drag.folder == folder) {
+        if (drag.kind == kind and drag.id == id and drag.folder == folder_id) {
             const dx = ctx.mouse.x - drag.start_x;
             const dy = ctx.mouse.y - drag.start_y;
             if (dx * dx + dy * dy > 36) drag.moved = true;
@@ -488,7 +488,11 @@ fn dockFolderIcon(ctx: *d.Ctx, dl: *c.ImDrawList, f: *const types.GuildFolder, i
     const color = if (f.color != 0) d.Rgba.hex(f.color) else ctx.col(.accent);
     const radius = w.shapeRadius(shape, ir.w);
     var mentions: u32 = 0;
-    for (f.guilds) |gid| if (ctx.store.guild(gid)) |g| mentions += g.mentions;
+    for (f.guilds) |gid| {
+        if (ctx.store.guild(gid)) |g| {
+            mentions += g.mentions;
+        }
+    }
 
     d.rect(dl, ir, color.alpha(if (open) 0.34 else 0.2), radius);
     if (open) {

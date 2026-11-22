@@ -10,10 +10,13 @@ pub const Target = union(enum) {
     folder: u64,
 };
 
+pub const MoveGuild = struct { guild: Id, target: Target, place: Place, new_id: u64 = 0 };
+pub const MoveFolder = struct { folder: u64, target: Target, place: Place };
+
 pub const Change = union(enum) {
     create: struct { first: Id, second: Id, id: u64 },
-    move_guild: struct { guild: Id, target: Target, place: Place, new_id: u64 = 0 },
-    move_folder: struct { folder: u64, target: Target, place: Place },
+    move_guild: MoveGuild,
+    move_folder: MoveFolder,
     rename: struct { folder: u64, name: []const u8 },
     color: struct { folder: u64, color: u32 },
     delete: u64,
@@ -207,7 +210,7 @@ fn insertLooseAt(gpa: std.mem.Allocator, list: *std.ArrayList(types.GuildFolder)
     try insertFolder(gpa, list, index, .{ .id = 0, .name = name, .color = 0, .guilds = ids });
 }
 
-fn moveGuild(gpa: std.mem.Allocator, list: *std.ArrayList(types.GuildFolder), change: Change.move_guild) error{OutOfMemory, InvalidTarget}!void {
+fn moveGuild(gpa: std.mem.Allocator, list: *std.ArrayList(types.GuildFolder), change: MoveGuild) error{OutOfMemory, InvalidTarget}!void {
     const owner = guildIndex(list.items, change.guild) orelse return error.InvalidTarget;
     switch (change.place) {
         .inside => {
@@ -248,7 +251,7 @@ fn moveGuild(gpa: std.mem.Allocator, list: *std.ArrayList(types.GuildFolder), ch
     }
 }
 
-fn moveFolder(gpa: std.mem.Allocator, list: *std.ArrayList(types.GuildFolder), change: Change.move_folder) error{OutOfMemory, InvalidTarget}!void {
+fn moveFolder(gpa: std.mem.Allocator, list: *std.ArrayList(types.GuildFolder), change: MoveFolder) error{OutOfMemory, InvalidTarget}!void {
     const source = folderIndex(list.items, change.folder) orelse return error.InvalidTarget;
     const target = targetIndex(list.items, change.target) orelse return error.InvalidTarget;
     if (source == target) return;
