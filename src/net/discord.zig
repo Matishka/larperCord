@@ -1196,23 +1196,41 @@ pub const Gateway = struct {
     /// Passa as pastas para o Store (só se vieram: uma atualização parcial
     /// sem pastas não apaga as que já temos).
     fn emitFolderList(g: *Gateway, folders: []const types.GuildFolder) void {
+        if (folders.len == 0) {
+            g.emit(.{ .guild_folders = &.{} });
+            return;
+        }
         const out = alloc.alloc(types.GuildFolder, folders.len) catch return;
         var n: usize = 0;
         for (folders) |f| {
-            const guilds = alloc.dupe(Id, f.guilds) catch continue;
+            const guilds = alloc.dupe(Id, f.guilds) catch {
+                for (out[0..n]) |old| {
+                    alloc.free(old.name);
+                    alloc.free(old.guilds);
+                }
+                alloc.free(out);
+                return;
+            };
             const name = alloc.dupe(u8, f.name) catch {
                 alloc.free(guilds);
-                continue;
+                for (out[0..n]) |old| {
+                    alloc.free(old.name);
+                    alloc.free(old.guilds);
+                }
+                alloc.free(out);
+                return;
             };
             out[n] = .{ .id = f.id, .name = name, .color = f.color, .guilds = guilds };
             n += 1;
         }
-        g.emit(.{ .guild_folders = out[0..n] });
+        g.emit(.{ .guild_folders = out });
     }
 
-    fn emitFolders(g: *Gateway, layout: settings_proto.Layout) void {
+    fn emitFolders(g: *Gateway, layout: settings_proto.Layout, partial: bool) void {
         defer layout.deinit(alloc);
-        if (layout.folders.len == 0) return;
+        // READY é completo: lista vazia também limpa uma ordem antiga em cache.
+        // USER_SETTINGS_PROTO_UPDATE pode ser parcial e não deve apagar as pastas.
+        if (partial and layout.folders.len == 0) return;
         g.emitFolderList(layout.folders);
     }
 
@@ -1561,7 +1579,7 @@ pub const Gateway = struct {
             const b64 = j.str(j.get(st, "proto")) orelse return;
             const partial = if (j.get(d, "partial")) |pv| pv == .bool and pv.bool else false;
             conta_net.onProtoUpdate(g, b64, partial);
-            if (settings_proto.fromProtoBase64(alloc, b64)) |layout| g.emitFolders(layout) else |_| {}
+            if (settings_proto.fromProtoBase64(alloc, b64)) |layout| g.emitFolders(layout, partial) else |_| {}
             return;
         }
         if (std.mem.eql(u8, t, "USER_GUILD_SETTINGS_UPDATE")) return conta_net.onGuildSettingsUpdate(g, d);
@@ -3026,7 +3044,7 @@ pub const Gateway = struct {
         // Pastas e ordem dos servidores: protobuf das configurações (contas
         // atuais) ou o JSON antigo.
         if (j.str(j.get(d, "user_settings_proto"))) |b64| {
-            if (settings_proto.fromProtoBase64(alloc, b64)) |layout| g.emitFolders(layout) else |_| {}
+            if (settings_proto.fromProtoBase64(alloc, b64)) |layout| g.emitFolders(layout, false) else |_| {}
         } else if (j.get(d, "user_settings")) |us| if (j.get(us, "guild_folders")) |gf| {
             if (settings_proto.fromJson(alloc, gf)) |layout| g.emitFolders(layout) else |_| {}
         };
