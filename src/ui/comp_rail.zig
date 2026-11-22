@@ -450,7 +450,7 @@ fn nextDockFolderId(ctx: *const d.Ctx) u64 {
 }
 
 fn beginDockDrag(ctx: *d.Ctx, kind: DockDragKind, id: u64, folder_id: u64, hb: d.Hit) void {
-    if (!hb.held or ctx.st.settings.open) return;
+    if (!hb.held or ctx.st.settings.open or ctx.st.popup != .none) return;
     if (ctx.st.dock_drag == null) {
         ctx.st.dock_drag = .{ .kind = kind, .id = id, .folder = folder_id, .start_x = ctx.mouse.x, .start_y = ctx.mouse.y };
     }
@@ -498,8 +498,11 @@ fn dropDockItem(ctx: *d.Ctx, target: guild_layout.Target, cx: f32, size: f32) vo
 }
 
 /// Retorna true quando o mouse soltou um item arrastado sobre este destino.
-fn releaseDockOn(ctx: *d.Ctx, hb: d.Hit, target: guild_layout.Target, cx: f32, size: f32) bool {
-    if (!c.ImGui_IsMouseReleased(0) or !hb.hovered) return false;
+fn releaseDockOn(ctx: *d.Ctx, target: guild_layout.Target, target_rect: d.Rect, cx: f32, size: f32) bool {
+    // ImGui suppresses hover on every item except the active drag source.
+    // Use the actual target rectangle on mouse-up so dropping onto another
+    // server (or a folder member) works while the source keeps the active ID.
+    if (!c.ImGui_IsMouseReleased(0) or ctx.st.popup != .none or !target_rect.contains(ctx.mouse.x, ctx.mouse.y)) return false;
     if (ctx.st.dock_drag) |drag| {
         if (drag.moved) dropDockItem(ctx, target, cx, size);
         ctx.st.dock_drag = null;
@@ -574,7 +577,6 @@ fn popupBelongsToFolder(ctx: *const d.Ctx, f: *const types.GuildFolder) bool {
 
 fn folderPopover(
     ctx: *d.Ctx,
-    dl: *c.ImDrawList,
     f: *const types.GuildFolder,
     anchor_x: f32,
     r: d.Rect,
@@ -594,7 +596,7 @@ fn folderPopover(
     const desired_w = @max(248.0, grid_w + padding * 2);
     const panel_w = @min(desired_w, @max(1.0, @min(560.0, r.w - 24)));
     const header_h: f32 = 64;
-    const panel_h = header_h + grid_h + padding;
+    const panel_h = header_h + grid_h + padding + 38;
     const min_x = r.x + 12;
     const max_x = @max(min_x, r.right() - panel_w - 12);
     const panel_x = std.math.clamp(anchor_x - panel_w / 2, min_x, max_x);
@@ -608,8 +610,24 @@ fn folderPopover(
     const folder_color = if (f.color != 0) d.Rgba.hex(f.color) else ctx.col(.accent);
     const radius: f32 = 20;
 
+    // The tray is drawn above the Dock, outside the Dock's clipped child region.
+    // Give it a real ImGui window too: otherwise its InvisibleButtons are clipped
+    // to the Dock child and clicks fall through to friends/channels behind it.
+    const shadow_pad: f32 = 24;
+    const window_x = @max(ctx.win.x, panel.x - shadow_pad);
+    const window_y = @max(ctx.win.y, panel.y - shadow_pad);
+    const window_right = @min(ctx.win.right(), panel.right() + shadow_pad);
+    const window_bottom = @min(ctx.win.bottom(), panel.bottom() + shadow_pad + 14);
+    c.ImGui_SetNextWindowPos(d.v(window_x, window_y), 0);
+    c.ImGui_SetNextWindowSize(d.v(window_right - window_x, window_bottom - window_y), 0);
+    _ = c.ImGui_Begin("##dock-folder-popover", null, c.ImGuiWindowFlags_NoDecoration | c.ImGuiWindowFlags_NoBackground |
+        c.ImGuiWindowFlags_NoSavedSettings | c.ImGuiWindowFlags_NoMove | c.ImGuiWindowFlags_NoScrollWithMouse);
+    defer c.ImGui_End();
+    const dl = c.ImGui_GetWindowDrawList();
+
     d.shadow(dl, panel, radius, 18, ctx.col(.shadow));
-    d.rect(dl, panel, ctx.col(.overlay).mix(folder_color, 0.18).alpha(0.97), radius);
+    // overlay is an opaque surface token; do not lower its alpha here.
+    d.rect(dl, panel, ctx.col(.overlay).mix(folder_color, 0.18), radius);
     d.rect(dl, .{ .x = panel.x + 1, .y = panel.y + 1, .w = panel.w - 2, .h = 58 }, folder_color.alpha(0.10), radius - 1);
     d.border(dl, panel, ctx.col(.border).mix(folder_color, 0.55).alpha(0.96), radius, 1.2);
 
@@ -640,7 +658,7 @@ fn folderPopover(
     d.circle(dl, more.x + 16, more.y + 16, 1.7, dots_color);
     d.circle(dl, more.x + 22, more.y + 16, 1.7, dots_color);
     if (more_hb.clicked) folderContextMenu(ctx, panel, .guild_folder, f.id);
-    tooltip(ctx, @truncate(f.id *% 19 +% 8800), more.right() + 8, more.y + 16, i18n.tr("Opções da pasta", "Folder options"), more_hb.hovered);
+    if (more_hb.hovered) folderTooltip(ctx, dl, panel, i18n.tr("Opções da pasta", "Folder options"));
 
     d.line(dl, panel.x + 18, panel.y + header_h - 1, panel.right() - 18, panel.y + header_h - 1, ctx.col(.border).alpha(0.8), 1);
 
@@ -657,7 +675,7 @@ fn folderPopover(
         const hb = d.hit(ctx, 6000 + j, ir);
         qa.mark(ir, "guild-folder-member:{d}", .{gid});
         beginDockDrag(ctx, .guild, gid, f.id, hb);
-        const dropped = releaseDockOn(ctx, hb, .{ .guild = .{ .id = gid, .folder = f.id } }, ix + tile / 2, tile);
+        const dropped = releaseDockOn(ctx, .{ .guild = .{ .id = gid, .folder = f.id } }, ir, ix + tile / 2, tile);
         if (hb.clicked and !dropped) ctx.act(.{ .select_guild = gid });
         if (hb.right) {
             // Right-clicking a member must not collapse its parent folder.
@@ -669,8 +687,28 @@ fn folderPopover(
         glyph(ctx, dl, g, ix + tile / 2, iy + tile / 2, tile, shape, ctx.st.guild == gid or hb.hovered);
         if (g.mentions > 0) badge(ctx, dl, ir.right() + 2, ir.y - 2, g.mentions);
         if (ctx.st.guild == gid) d.circle(dl, ix + tile / 2, ir.bottom() + 3, 2.2, folder_color);
-        if (hb.hovered) tooltip(ctx, 6100 + j, ir.right() + 8, iy + tile / 2, g.name, true);
+        if (hb.hovered) folderTooltip(ctx, dl, panel, g.name);
     }
+}
+
+fn folderTooltip(ctx: *d.Ctx, dl: *c.ImDrawList, panel: d.Rect, label: []const u8) void {
+    const fs: f32 = 13;
+    const font = ctx.ui.get(.semibold);
+    const text_w = @min(d.width(font, fs, label), @max(48.0, panel.w - 48));
+    const tip_w = text_w + 20;
+    const tip_h: f32 = 30;
+    const min_x = panel.x + 10;
+    const max_x = @max(min_x, panel.right() - tip_w - 10);
+    const tip_x = std.math.clamp(ctx.mouse.x + 14, min_x, max_x);
+    const min_y = panel.y + 64;
+    const max_y = @max(min_y, panel.bottom() - tip_h - 10);
+    const above = ctx.mouse.y - tip_h - 10;
+    const tip_y = if (above >= min_y) above else @min(max_y, ctx.mouse.y + 14);
+    const tip: d.Rect = .{ .x = tip_x, .y = tip_y, .w = tip_w, .h = tip_h };
+    d.shadow(dl, tip, 7, 9, ctx.col(.shadow));
+    d.rect(dl, tip, ctx.col(.sidebar), 7);
+    d.border(dl, tip, ctx.col(.border).mix(ctx.col(.text), 0.18), 7, 1);
+    _ = d.textClipped(dl, font, fs, tip.x + 10, tip.y + 7.5, ctx.col(.text), label, text_w);
 }
 
 /// Dock no estilo do macOS: os ícones crescem perto do mouse; pastas e servidores
@@ -742,7 +780,7 @@ fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
             .guild => |g| {
                 qa.mark(ir, "guild:{d}", .{g.id});
                 beginDockDrag(ctx, .guild, g.id, 0, hb);
-                const dropped = releaseDockOn(ctx, hb, .{ .guild = .{ .id = g.id } }, cx, size);
+                const dropped = releaseDockOn(ctx, .{ .guild = .{ .id = g.id } }, ir, cx, size);
                 if (hb.clicked and !dropped) ctx.act(.{ .select_guild = g.id });
                 if (hb.right) ctx.popup(.{ .menu = .{ .kind = .guild, .id = g.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
                 glyph(ctx, dl, g, cx, ir.y + size / 2, size, shape, true);
@@ -753,7 +791,7 @@ fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
             .folder => |f| {
                 qa.mark(ir, "guild-folder:{d}", .{f.id});
                 beginDockDrag(ctx, .folder, f.id, 0, hb);
-                const dropped = releaseDockOn(ctx, hb, .{ .folder = f.id }, cx, size);
+                const dropped = releaseDockOn(ctx, .{ .folder = f.id }, ir, cx, size);
                 if (hb.clicked and !dropped) {
                     if (ctx.st.open_folders.contains(f.id)) {
                         _ = ctx.st.open_folders.remove(f.id);
@@ -782,7 +820,7 @@ fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
 
     // Conteúdo da pasta fica numa janela flutuante; a linha principal do Dock
     // não cresce nem se mistura com os servidores que estão dentro da pasta.
-    if (open_folder) |f| folderPopover(ctx, dl, f, open_cx, r, bg, base, shape);
+    if (open_folder) |f| folderPopover(ctx, f, open_cx, r, bg, base, shape);
     if (c.ImGui_IsMouseReleased(0)) ctx.st.dock_drag = null;
 }
 
