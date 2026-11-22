@@ -3046,7 +3046,7 @@ pub const Gateway = struct {
         if (j.str(j.get(d, "user_settings_proto"))) |b64| {
             if (settings_proto.fromProtoBase64(alloc, b64)) |layout| g.emitFolders(layout, false) else |_| {}
         } else if (j.get(d, "user_settings")) |us| if (j.get(us, "guild_folders")) |gf| {
-            if (settings_proto.fromJson(alloc, gf)) |layout| g.emitFolders(layout) else |_| {}
+            if (settings_proto.fromJson(alloc, gf)) |layout| g.emitFolders(layout, false) else |_| {}
         };
         conta_net.onReady(g, d);
         g.emit(.{ .status = .ready });
