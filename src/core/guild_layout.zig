@@ -403,3 +403,41 @@ test "dragging a server reorders it around another loose server" {
     try std.testing.expectEqual(@as(Id, 3), moved[0].guilds[0]);
     try std.testing.expectEqual(@as(Id, 1), moved[1].guilds[0]);
 }
+
+
+test "creating a folder preserves unrelated existing folders" {
+    const a = std.testing.allocator;
+    const guilds = [_]types.Guild{
+        .{ .id = 1, .name = "A", .acronym = "A" },
+        .{ .id = 2, .name = "B", .acronym = "B" },
+        .{ .id = 3, .name = "C", .acronym = "C" },
+        .{ .id = 4, .name = "D", .acronym = "D" },
+        .{ .id = 5, .name = "E", .acronym = "E" },
+        .{ .id = 6, .name = "F", .acronym = "F" },
+    };
+    const current = [_]types.GuildFolder{
+        .{ .id = 100, .name = "Friends", .color = 0x112233, .guilds = &.{ 1, 2 } },
+        .{ .id = 0, .name = "", .color = 0, .guilds = &.{3} },
+        .{ .id = 200, .name = "Work", .color = 0x445566, .guilds = &.{ 4, 5 } },
+        .{ .id = 0, .name = "", .color = 0, .guilds = &.{6} },
+    };
+    const made = try apply(a, &guilds, &current, .{ .move_guild = .{
+        .guild = 1,
+        .target = .{ .guild = .{ .id = 6 } },
+        .place = .inside,
+        .new_id = 300,
+    } });
+    defer free(a, made);
+
+    try std.testing.expectEqual(@as(usize, 4), made.len);
+    try std.testing.expectEqual(@as(u64, 300), made[0].id);
+    try std.testing.expectEqualSlices(Id, &.{ 1, 6 }, made[0].guilds);
+    try std.testing.expectEqual(@as(u64, 100), made[1].id);
+    try std.testing.expectEqualStrings("Friends", made[1].name);
+    try std.testing.expectEqualSlices(Id, &.{2}, made[1].guilds);
+    try std.testing.expectEqual(@as(u64, 0), made[2].id);
+    try std.testing.expectEqualSlices(Id, &.{3}, made[2].guilds);
+    try std.testing.expectEqual(@as(u64, 200), made[3].id);
+    try std.testing.expectEqualStrings("Work", made[3].name);
+    try std.testing.expectEqualSlices(Id, &.{ 4, 5 }, made[3].guilds);
+}
