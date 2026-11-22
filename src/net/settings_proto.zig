@@ -350,7 +350,7 @@ pub fn guildFoldersPatchBody(gpa: std.mem.Allocator, raw: []const u8, folders: [
         if (f.guilds.len > 0) try folder.fieldPacked64(1, f.guilds);
         if (f.id != 0) try folder.fieldWrapInt(2, f.id);
         if (f.name.len > 0) try folder.fieldWrapStr(3, f.name);
-        if (f.color != 0) try folder.fieldWrapInt(4, f.color);
+        if (f.color != 0) try folder.fieldWrapInt(4, @as(u64, f.color));
         try guild_folders.fieldBytes(1, folder.out.items);
     }
     if (current.positions.len > 0) {
