@@ -573,7 +573,9 @@ test "PATCH de pastas envia somente o campo 14 e alinha guild_positions" {
     };
     const body = try guildFoldersPatchBody(a, src, &folders, 42);
     defer a.free(body);
-    const value = try std.json.parseFromSliceLeaky(std.json.Value, a, body, .{});
+    const parsed = try std.json.parseFromSlice(std.json.Value, a, body, .{});
+    defer parsed.deinit();
+    const value = parsed.value;
     try std.testing.expectEqual(@as(?i64, 42), jsonx.int(jsonx.get(value, "required_data_version")));
     const b64 = jsonx.str(jsonx.get(value, "settings")) orelse return error.InvalidBase64;
     const dec = std.base64.standard.Decoder;
