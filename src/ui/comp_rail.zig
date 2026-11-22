@@ -549,7 +549,12 @@ fn folderPopover(
     const min_x = r.x + 12;
     const max_x = @max(min_x, r.right() - panel_w - 12);
     const panel_x = std.math.clamp(anchor_x - panel_w / 2, min_x, max_x);
-    const panel_y = @max(r.y + 6, bg.y - panel_h - 12);
+    // Position the popover against the full app viewport, not the narrow Dock
+    // layout region. The latter starts near the bottom of the window and was
+    // forcing the panel below the Dock, where most of it became invisible.
+    const min_y = ctx.win.y + 12;
+    const max_y = @max(min_y, ctx.win.bottom() - panel_h - 12);
+    const panel_y = std.math.clamp(bg.y - panel_h - 12, min_y, max_y);
     const panel: d.Rect = .{ .x = panel_x, .y = panel_y, .w = panel_w, .h = panel_h };
     const folder_color = if (f.color != 0) d.Rgba.hex(f.color) else ctx.col(.accent);
     const radius: f32 = 20;
