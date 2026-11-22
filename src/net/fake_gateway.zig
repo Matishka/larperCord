@@ -694,6 +694,7 @@ pub const Gateway = struct {
                     try g.seedFrecency();
                     try g.emitFavorites(req);
                 },
+                .guild_layout => |folders| @import("../core/guild_layout.zig").free(alloc, folders),
                 .gif_favorite => |f| {
                     defer {
                         alloc.free(f.url);

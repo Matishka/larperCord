@@ -11,6 +11,7 @@ const accounts_mod = @import("core/accounts.zig");
 const Store = store_mod.Store;
 const ev = @import("core/event.zig");
 const types = @import("core/types.zig");
+const guild_layout = @import("core/guild_layout.zig");
 const Gateway = @import("net/fake_gateway.zig").Gateway;
 const discord = @import("net/discord.zig");
 const gw = @import("net/fake_gateway.zig");
@@ -1711,6 +1712,31 @@ pub const App = struct {
                 const ch = last orelse app.firstTextChannel(g) orelse return app.handle(.open_friends);
                 if (g == 0 and st.last_channel.get(0) == null) return app.handle(.open_friends);
                 app.openChannel(ch, false);
+            },
+            .guild_layout => |change| {
+                const rename_name = if (change == .rename) change.rename.name else null;
+                defer {
+                    if (rename_name) |name| st.gpa.free(name);
+                }
+                const ca = std.heap.c_allocator;
+                const updated = guild_layout.apply(ca, app.store.guilds.items, app.store.folders, change) catch {
+                    st.showToast(now(), true, "não foi possível reorganizar os servidores", "couldn't reorganize servers", .{});
+                    return;
+                };
+                const command_folders = if (app.net == .real) guild_layout.clone(ca, updated) catch {
+                    guild_layout.free(ca, updated);
+                    st.showToast(now(), true, "não foi possível preparar a sincronização", "couldn't prepare the sync", .{});
+                    return;
+                } else null;
+                app.store.apply(.{ .guild_folders = updated }, now()) catch {
+                    if (command_folders) |folders| guild_layout.free(ca, folders);
+                    guild_layout.free(ca, updated);
+                    return;
+                };
+                if (command_folders) |folders| {
+                    app.cmd(.{ .guild_layout = folders });
+                    st.showToast(now(), false, "sincronizando pastas com o Discord…", "syncing folders with Discord…", .{});
+                }
             },
             .set_status => |status| @import("app_conta.zig").setStatus(app, status, 0, false),
             .set_status_for => |sf| @import("app_conta.zig").setStatus(app, sf.status, @import("core/conta.zig").statusExpiry(sf.status, sf.minutes, now()), false),

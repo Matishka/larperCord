@@ -142,6 +142,7 @@ fn popupKey(p: state.Popup) u64 {
         .onboarding => |t| 24 +% t.guild *% 31,
         .devices => |dv| 25 +% @as(u64, @intFromEnum(dv.which)),
         .tab_set_name => |t| 26 +% (if (t.rename) |i| @as(u64, i) + 1 else 0) *% 31,
+        .guild_folder_name => |t| 28 +% t.id *% 31,
         .lembrete => |t| 27 +% t.message *% 31 +% @as(u64, t.edit) *% 17,
         .exportar => |t| 27 +% t.channel *% 31,
     };
@@ -227,6 +228,7 @@ pub fn draw(ctx: *d.Ctx) void {
         .onboarding => |t| @import("entrada.zig").drawOnboarding(ctx, t.guild),
         .devices => |dv| @import("device_menu.zig").draw(ctx, dv.which, dv.x, dv.y),
         .tab_set_name => |t| @import("conjuntos.zig").drawName(ctx, t.rename),
+        .guild_folder_name => |t| @import("guild_folder_name.zig").draw(ctx, t.id),
         .exportar => |t| exportar_ui.drawDialog(ctx, t.channel),
         .none => {},
     }
@@ -562,6 +564,12 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
             // Quem é dono não pode sair: precisa passar o servidor antes.
             if (ctx.store.guild(id)) |vg| if (vg.owner != ctx.store.me) add(&items, &n, .{ .label = "Sair do servidor", .en = "Leave Server", .id = 67, .danger = true, .sep = true });
         },
+        .guild_folder => {
+            if (folderExists(ctx, id)) {
+                add(&items, &n, .{ .label = "Renomear pasta…", .en = "Rename Folder…", .id = 70 });
+                add(&items, &n, .{ .label = "Remover pasta", .en = "Remove Folder", .id = 71, .danger = true, .sep = true });
+            }
+        },
     }
 
     pluginItems(&items, &n, kind);
@@ -569,7 +577,7 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
     const row_h: f32 = 32;
     const quick_h: f32 = if (kind == .message) 46 else 0;
     // "Cor do servidor": uma fileira de cores no fim do menu do servidor.
-    const colors_h: f32 = if (kind == .guild and ctx.store.guild(id) != null) 62 else 0;
+    const colors_h: f32 = if ((kind == .guild and ctx.store.guild(id) != null) or (kind == .guild_folder and folderExists(ctx, id))) 62 else 0;
     var seps: f32 = 0;
     for (items[0..n]) |it| {
         if (it.sep) seps += 9;
@@ -658,7 +666,9 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
     }
     var chosen_account = false;
     if (picked == null) {
-        if (colors_h > 0) guildColors(ctx, idl, id, r, yy);
+        if (colors_h > 0) {
+            if (kind == .guild) guildColors(ctx, idl, id, r, yy) else if (kind == .guild_folder) guildFolderColors(ctx, idl, id, r, yy);
+        }
         if (kind == .status and accounts_menu.draw(ctx, idl, r, yy)) chosen_account = true;
     }
     if (scrolls) {
@@ -696,6 +706,44 @@ fn guildColors(ctx: *d.Ctx, dl: *c.ImDrawList, guild: Id, r: d.Rect, y: f32) voi
         } else d.circle(dl, cx, cy, 7.5, d.Rgba.hex(palette[i - 1]));
         if (hb.clicked) {
             ctx.act(.{ .set_guild_color = .{ .guild = guild, .rgb = if (i == 0) null else palette[i - 1] } });
+            return close(ctx);
+        }
+    }
+}
+
+fn folderExists(ctx: *const d.Ctx, id: Id) bool {
+    for (ctx.store.folders) |f| if (f.id == id and id != 0) return true;
+    return false;
+}
+
+/// Fileira de cores da pasta; a primeira opção restaura a cor padrão.
+fn guildFolderColors(ctx: *d.Ctx, dl: *c.ImDrawList, folder: Id, r: d.Rect, y: f32) void {
+    const palette = &@import("../app.zig").App.accents;
+    const fam = ctx.ui;
+    d.line(dl, r.x + 10, y + 4, r.right() - 10, y + 4, ctx.col(.border), 1);
+    d.text(dl, fam.get(.semibold), 12, r.x + 16, y + 12, ctx.col(.muted), i18n.tr("Cor da pasta", "Folder Color"));
+    var current: u32 = 0;
+    for (ctx.store.folders) |f| if (f.id == folder) {
+        current = f.color;
+        break;
+    };
+    const step = (r.w - 24) / @as(f32, @floatFromInt(palette.len + 1));
+    for (0..palette.len + 1) |i| {
+        const cx = r.x + 12 + step * (@as(f32, @floatFromInt(i)) + 0.5);
+        const cy = y + 44;
+        const sr: d.Rect = .{ .x = cx - step / 2, .y = cy - 11, .w = step, .h = 22 };
+        const hb = d.hit(ctx, 340 + i, sr);
+        qa.mark(sr, "folder-color:{d}", .{i});
+        const color = if (i == 0) 0 else palette[i - 1];
+        const selected = current == color;
+        if (selected or hb.hovered) c.ImDrawList_AddCircleEx(dl, d.v(cx, cy), 10.5, (if (selected) ctx.col(.text) else ctx.col(.muted)).u(), 0, 1.5, 0);
+        if (i == 0) {
+            c.ImDrawList_AddCircleEx(dl, d.v(cx, cy), 7, ctx.col(.faint).u(), 0, 1.5, 0);
+            d.line(dl, cx - 4.5, cy + 4.5, cx + 4.5, cy - 4.5, ctx.col(.faint), 1.5);
+            d.tip(ctx, sr, i18n.tr("Cor padrão", "Default color"), hb.hovered);
+        } else d.circle(dl, cx, cy, 7.5, d.Rgba.hex(color));
+        if (hb.clicked) {
+            ctx.act(.{ .guild_layout = .{ .color = .{ .folder = folder, .color = color } } });
             return close(ctx);
         }
     }
@@ -753,6 +801,14 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
     close(ctx);
     if (kind == .pet) return @import("mascote_pet.zig").menuChoose(ctx, item);
     if (kind == .tabs) return @import("conjuntos.zig").menuChoose(ctx, item, id);
+    if (kind == .guild_folder) {
+        switch (item) {
+            70 => @import("guild_folder_name.zig").open(ctx, id),
+            71 => ctx.act(.{ .guild_layout = .{ .delete = id } }),
+            else => {},
+        }
+        return;
+    }
     if (kind == .plugin_choices) {
         const host = @import("../plugins/host.zig");
         const hit = host.menuEntry(host.appOf(), choice_kind, choice_index) orelse return;

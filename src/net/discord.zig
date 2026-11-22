@@ -1195,12 +1195,10 @@ pub const Gateway = struct {
 
     /// Passa as pastas para o Store (só se vieram: uma atualização parcial
     /// sem pastas não apaga as que já temos).
-    fn emitFolders(g: *Gateway, layout: settings_proto.Layout) void {
-        defer layout.deinit(alloc);
-        if (layout.folders.len == 0) return;
-        const out = alloc.alloc(types.GuildFolder, layout.folders.len) catch return;
+    fn emitFolderList(g: *Gateway, folders: []const types.GuildFolder) void {
+        const out = alloc.alloc(types.GuildFolder, folders.len) catch return;
         var n: usize = 0;
-        for (layout.folders) |f| {
+        for (folders) |f| {
             const guilds = alloc.dupe(Id, f.guilds) catch continue;
             const name = alloc.dupe(u8, f.name) catch {
                 alloc.free(guilds);
@@ -1210,6 +1208,18 @@ pub const Gateway = struct {
             n += 1;
         }
         g.emit(.{ .guild_folders = out[0..n] });
+    }
+
+    fn emitFolders(g: *Gateway, layout: settings_proto.Layout) void {
+        defer layout.deinit(alloc);
+        if (layout.folders.len == 0) return;
+        g.emitFolderList(layout.folders);
+    }
+
+    fn emitFolderBytes(g: *Gateway, a: std.mem.Allocator, raw: []const u8) void {
+        const layout = settings_proto.fromProto(a, raw) catch return;
+        defer layout.deinit(a);
+        g.emitFolderList(layout.folders);
     }
 
     /// Grupo da lista de membros: "online", "offline" ou o ID de um cargo.
@@ -3524,6 +3534,7 @@ pub const Gateway = struct {
                 alloc.free(f.src);
                 alloc.free(f.shown);
             },
+            .guild_layout => |folders| @import("../core/guild_layout.zig").free(alloc, folders),
             .forward_message => |f| alloc.free(f.text),
             .ack_bulk => |list| if (list.len > 0) alloc.free(list),
             .refresh_urls => |list| {
@@ -3713,6 +3724,61 @@ pub const Gateway = struct {
             // A resposta traz o arquivo como ficou; sem ele, vale o que foi mandado.
             const saved = if (v) |x| if (j.str(j.get(x, "settings"))) |st| decodeSettings(a, st) else null else null;
             return g.emitFavorites(req, saved orelse out);
+        }
+    }
+
+    /// Grava a ordem e as pastas no campo 14 de user_settings_proto.
+    /// O PATCH leva apenas esse campo; favoritos, status e outras preferências ficam intactos.
+    /// Se outro aparelho gravou no meio, refaz o GET e tenta uma vez com a versão nova.
+    fn setGuildLayout(g: *Gateway, folders: []const types.GuildFolder) void {
+        var arena = std.heap.ArenaAllocator.init(alloc);
+        defer arena.deinit();
+        const a = arena.allocator();
+        var tries: u8 = 0;
+        while (true) : (tries += 1) {
+            const raw = g.frecency(a) orelse {
+                g.notice("não foi possível ler as configurações do Discord", "couldn't read Discord settings", .{});
+                return;
+            };
+            const version = status_proto.dataVersion(raw) catch null;
+            const body = settings_proto.guildFoldersPatchBody(a, raw, folders, version) catch {
+                g.notice("as pastas vieram num formato que o app não entende", "the folder settings use an unsupported format", .{});
+                g.emitFolderBytes(a, raw);
+                return;
+            };
+            var resp = g.request("PATCH", "/users/@me/settings-proto/2", body) orelse {
+                g.notice("sem conexão: a ordem dos servidores não foi salva", "no connection: server layout wasn't saved", .{});
+                g.emitFolderBytes(a, raw);
+                return;
+            };
+            defer resp.body.deinit(alloc);
+            if (resp.status >= 300) {
+                g.noticeHttp(i18n.tr("não foi possível salvar as pastas", "couldn't save folders"), &resp);
+                g.emitFolderBytes(a, raw);
+                return;
+            }
+            const v = std.json.parseFromSliceLeaky(Value, a, resp.body.items, .{}) catch null;
+            const stale = if (v) |x| if (j.get(x, "out_of_date")) |o| o == .bool and o.bool else false else false;
+            if (stale) {
+                if (tries == 0) continue;
+                g.notice("as configurações mudaram em outro aparelho: tente novamente", "settings changed on another device: try again", .{});
+                const latest = g.frecency(a) orelse raw;
+                g.emitFolderBytes(a, latest);
+                return;
+            }
+            if (v) |x| {
+                if (j.str(j.get(x, "settings"))) |saved| {
+                    const layout = settings_proto.fromProtoBase64(a, saved) catch {
+                        g.emitFolderList(folders);
+                        g.notice("pastas salvas ✓", "folders saved ✓", .{});
+                        return;
+                    };
+                    g.emitFolderList(layout.folders);
+                    layout.deinit(a);
+                } else g.emitFolderList(folders);
+            } else g.emitFolderList(folders);
+            g.notice("pastas salvas ✓", "folders saved ✓", .{});
+            return;
         }
     }
 
@@ -4154,6 +4220,7 @@ pub const Gateway = struct {
             },
             // Vai para `fav_batch` antes deste switch (`queueFavorite`).
             .gif_favorite => unreachable,
+            .guild_layout => |folders| g.setGuildLayout(folders),
             .fetch_invite => |code| {
                 const failed: ev.Event = .{ .invite = .{ .code = code, .invite = .{ .state = .failed } } };
                 const path = std.fmt.bufPrint(&path_buf, "/invites/{s}?with_counts=true&with_expiration=true", .{code.slice()}) catch return;

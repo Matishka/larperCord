@@ -14,6 +14,8 @@ const qa = @import("qa.zig");
 const anim = @import("anim.zig");
 const w = @import("widgets.zig");
 const types = @import("../core/types.zig");
+const guild_layout = @import("../core/guild_layout.zig");
+const DockDragKind = @import("state.zig").DockDragKind;
 const i18n = @import("i18n.zig");
 const icons = @import("icons.zig");
 
@@ -409,15 +411,111 @@ fn textTabs(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     c.ImGui_Dummy(d.v(1, @max(1, r.h - 6)));
 }
 
-/// Dock no estilo do macOS: os ícones crescem perto do mouse.
+fn nextDockFolderId(ctx: *const d.Ctx) u64 {
+    var id = (std.crypto.random.int(u64) & 0x7fff_ffff_ffff_ffff) | 1;
+    while (true) {
+        var used = false;
+        for (ctx.store.folders) |f| if (f.id == id) {
+            used = true;
+            break;
+        };
+        if (!used) return id;
+        id +%= 2;
+    }
+}
+
+fn beginDockDrag(ctx: *d.Ctx, kind: DockDragKind, id: u64, folder: u64, hb: d.Hit) void {
+    if (!hb.held or ctx.st.settings.open) return;
+    if (ctx.st.dock_drag == null) {
+        ctx.st.dock_drag = .{ .kind = kind, .id = id, .folder = folder, .start_x = ctx.mouse.x, .start_y = ctx.mouse.y };
+    }
+    if (ctx.st.dock_drag) |*drag| {
+        if (drag.kind == kind and drag.id == id and drag.folder == folder) {
+            const dx = ctx.mouse.x - drag.start_x;
+            const dy = ctx.mouse.y - drag.start_y;
+            if (dx * dx + dy * dy > 36) drag.moved = true;
+        }
+    }
+}
+
+fn dropDockItem(ctx: *d.Ctx, target: guild_layout.Target, cx: f32, size: f32) void {
+    const drag = ctx.st.dock_drag orelse return;
+    if (!drag.moved) return;
+    switch (drag.kind) {
+        .guild => {
+            const place: guild_layout.Place = switch (target) {
+                .folder => .inside,
+                .guild => if (@abs(ctx.mouse.x - cx) <= size * 0.22) .inside else if (ctx.mouse.x < cx) .before else .after,
+            };
+            var new_id: u64 = 0;
+            if (place == .inside) switch (target) {
+                .guild => |g| if (g.folder == 0 and g.id != drag.id) {
+                    new_id = nextDockFolderId(ctx);
+                },
+                .folder => {},
+            };
+            ctx.act(.{ .guild_layout = .{ .move_guild = .{
+                .guild = drag.id,
+                .target = target,
+                .place = place,
+                .new_id = new_id,
+            } } });
+        },
+        .folder => {
+            const place: guild_layout.Place = if (ctx.mouse.x < cx) .before else .after;
+            ctx.act(.{ .guild_layout = .{ .move_folder = .{
+                .folder = drag.id,
+                .target = target,
+                .place = place,
+            } } });
+        },
+    }
+}
+
+/// Retorna true quando o mouse soltou um item arrastado sobre este destino.
+fn releaseDockOn(ctx: *d.Ctx, hb: d.Hit, target: guild_layout.Target, cx: f32, size: f32) bool {
+    if (!c.ImGui_IsMouseReleased(0) or !hb.hovered) return false;
+    if (ctx.st.dock_drag) |drag| {
+        if (drag.moved) dropDockItem(ctx, target, cx, size);
+        ctx.st.dock_drag = null;
+        return drag.moved;
+    }
+    return false;
+}
+
+fn dockFolderIcon(ctx: *d.Ctx, dl: *c.ImDrawList, f: *const types.GuildFolder, ir: d.Rect, shape: w.Shape, selected: bool) void {
+    const open = ctx.st.open_folders.contains(f.id);
+    const color = if (f.color != 0) d.Rgba.hex(f.color) else ctx.col(.accent);
+    const radius = w.shapeRadius(shape, ir.w);
+    var mentions: u32 = 0;
+    for (f.guilds) |gid| if (ctx.store.guild(gid)) |g| mentions += g.mentions;
+
+    d.rect(dl, ir, color.alpha(if (open) 0.34 else 0.2), radius);
+    if (open) {
+        folderGlyph(dl, ir.x + ir.w / 2, ir.y + ir.h / 2, ir.w * 0.27, color.mix(d.Rgba.white, 0.18));
+    } else {
+        const ms = ir.w * 0.34;
+        const off = ms * 0.48;
+        for (f.guilds[0..@min(f.guilds.len, 4)], 0..) |gid, i| {
+            const g = ctx.store.guild(gid) orelse continue;
+            const mx = ir.x + ir.w / 2 + (if (i % 2 == 0) -off else off);
+            const my = ir.y + ir.h / 2 + (if (i / 2 == 0) -off else off);
+            glyph(ctx, dl, g, mx, my, ms, shape, false);
+        }
+    }
+    if (mentions > 0) badge(ctx, dl, ir.right() + 2, ir.y - 2, @intCast(@min(mentions, 999)));
+    if (selected) d.circle(dl, ir.x + ir.w / 2, ir.bottom() + 4, 2.5, ctx.col(.accent));
+}
+
+/// Dock no estilo do macOS: os ícones crescem perto do mouse; pastas e servidores
+/// são itens de primeira classe e podem ser arrastados para reordenar ou agrupar.
 fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
     const base = @min(d.pnum(n, "size", 40), r.h - 12);
-    var fb: [256]*types.Guild = undefined;
-    const order = flatOrder(ctx, &fb);
+    var rail_items: [256]Store.RailItem = undefined;
+    const order = ctx.store.railOrder(&rail_items);
     const count = order.len + 1;
     const gap: f32 = 10;
     const total = @as(f32, @floatFromInt(count)) * (base + gap) + gap;
-    // Keep the Dock centered when it fits; otherwise make its contents scrollable.
     const available = @max(1, r.w - 16);
     const overflow = total > available;
     const view_w = @min(total, available);
@@ -425,22 +523,18 @@ fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
     const max_scroll = @max(0, total - view_w);
     ctx.st.dock_scroll = std.math.clamp(ctx.st.dock_scroll, 0, max_scroll);
     if (overflow and !ctx.st.settings.open and r.contains(ctx.mouse.x, ctx.mouse.y)) {
-        // A vertical wheel scrolls horizontally; horizontal wheels/trackpads work too.
         const wheel = if (ctx.io.*.MouseWheelH != 0) ctx.io.*.MouseWheelH else ctx.io.*.MouseWheel;
         ctx.st.dock_scroll = std.math.clamp(ctx.st.dock_scroll - wheel * (base + gap) * 2, 0, max_scroll);
     }
     const near = ctx.mouse.y > r.y - 60 and ctx.mouse.y < r.bottom() and ctx.mouse.x > x0 - 40 and ctx.mouse.x < x0 + view_w + 40;
-    // Keep the glass background inside the window while the icons scroll.
     const bg: d.Rect = .{ .x = x0, .y = r.bottom() - base - 16, .w = view_w, .h = base + 14 };
     d.shadow(ctx.dl, bg, 18, 14, ctx.col(.shadow));
     d.rect(ctx.dl, bg, ctx.col(.elevated).alpha(0.85), 18);
     d.border(ctx.dl, bg, ctx.col(.border).mix(ctx.col(.accent), 0.3), 18, 1);
 
-    // Por cima de tudo, menos das configurações (que cobrem a janela).
     const dl = if (ctx.st.settings.open) ctx.dl else ctx.fg;
-    // Clip hit-testing and drawing to the visible Dock area.
     if (overflow) {
-        const clip_min = d.v(bg.x, r.y - base * 2);
+        const clip_min = d.v(bg.x, r.y - base * 4);
         const clip_max = d.v(bg.right(), r.bottom());
         c.ImGui_PushClipRect(clip_min, clip_max, true);
         if (!ctx.st.settings.open) c.ImDrawList_PushClipRect(dl, clip_min, clip_max, true);
@@ -449,89 +543,111 @@ fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
         if (!ctx.st.settings.open) c.ImDrawList_PopClipRect(dl);
         c.ImGui_PopClipRect();
     };
+
+    var open_folder: ?*const types.GuildFolder = null;
+    var open_cx: f32 = 0;
     var x = x0 + gap - ctx.st.dock_scroll;
     for (0..count) |i| {
         const cx = x + base / 2;
-        // Off-screen icons need neither hit boxes nor draw calls.
         if (overflow and (cx + base * 1.7 < bg.x or cx - base * 1.7 > bg.right())) {
             x += base + gap;
             continue;
         }
         const dist = @abs(ctx.mouse.x - cx);
-        const target: f32 = if (near) 1 + 0.65 * @max(0, 1 - dist / 140) else 1;
-        const k = anim.to(anim.id("dock", i), target, 22);
+        const scale: f32 = if (near) 1 + 0.65 * @max(0, 1 - dist / 140) else 1;
+        const k = anim.to(anim.id("dock", i), scale, 22);
         const size = base * k;
         const by = bg.bottom() - 7;
         const ir: d.Rect = .{ .x = cx - size / 2, .y = by - size, .w = size, .h = size };
         const hb = d.hit(ctx, 3000 + i, ir);
-        qa.mark(ir, "guild:{d}", .{if (i == 0) @as(types.Id, 0) else order[i - 1].id});
-        if (i == 0) mascote_pet.anchorIn(.dm_icon, ir, r, ctx.now_ms);
-        const g: ?*types.Guild = if (i == 0) null else order[i - 1];
-        const gid: types.Id = if (g) |x_| x_.id else 0;
-        if (hb.clicked) ctx.act(.{ .select_guild = gid });
-        if (hb.right) if (g) |gg| ctx.popup(.{ .menu = .{ .kind = .guild, .id = gg.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
-        if (g) |gg| {
-            glyph(ctx, dl, gg, cx, ir.y + size / 2, size, shape, true);
-            if (gg.mentions > 0) badge(ctx, dl, ir.right() + 2, ir.y - 2, gg.mentions);
-        } else {
+
+        if (i == 0) {
+            qa.mark(ir, "guild:0", .{});
+            mascote_pet.anchorIn(.dm_icon, ir, r, ctx.now_ms);
+            if (hb.clicked) ctx.act(.{ .select_guild = 0 });
+            if (ctx.st.guild == 0) d.circle(dl, cx, bg.bottom() - 3, 2.5, ctx.col(.accent));
             d.rect(dl, ir, ctx.col(.accent), w.shapeRadius(shape, size));
             const t = "DM";
             const fs = size * 0.34;
             const tw = d.width(ctx.ui.get(.bold), fs, t);
             d.text(dl, ctx.ui.get(.bold), fs, cx - tw / 2, ir.y + size / 2 - fs * 0.62, ctx.col(.accent_text), t);
-        }
-        if (ctx.st.guild == gid) d.circle(dl, cx, bg.bottom() - 3, 2.5, ctx.col(.accent));
-        if (hb.hovered) {
-            const name = if (g) |gg| gg.name else i18n.tr("Mensagens diretas", "Direct Messages");
-            const fs: f32 = 13;
-            const tw = d.width(ctx.ui.get(.semibold), fs, name);
-            const tr: d.Rect = .{ .x = cx - tw / 2 - 10, .y = ir.y - 34, .w = tw + 20, .h = 26 };
-            d.rect(dl, tr, ctx.col(.overlay), 8);
-            d.text(dl, ctx.ui.get(.semibold), fs, tr.x + 10, d.centerY(tr, fs), ctx.col(.text), name);
+            if (hb.hovered) tooltip(ctx, 3000, ir.right() + 12, ir.y + size / 2, i18n.tr("Mensagens diretas", "Direct Messages"), true);
+        } else switch (order[i - 1]) {
+            .guild => |g| {
+                qa.mark(ir, "guild:{d}", .{g.id});
+                beginDockDrag(ctx, .guild, g.id, 0, hb);
+                const dropped = releaseDockOn(ctx, hb, .{ .guild = .{ .id = g.id } }, cx, size);
+                if (hb.clicked and !dropped) ctx.act(.{ .select_guild = g.id });
+                if (hb.right) ctx.popup(.{ .menu = .{ .kind = .guild, .id = g.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
+                glyph(ctx, dl, g, cx, ir.y + size / 2, size, shape, true);
+                if (g.mentions > 0) badge(ctx, dl, ir.right() + 2, ir.y - 2, g.mentions);
+                if (ctx.st.guild == g.id) d.circle(dl, cx, bg.bottom() - 3, 2.5, ctx.col(.accent));
+                if (hb.hovered) tooltip(ctx, 3000 + i, ir.right() + 12, ir.y + size / 2, g.name, true);
+            },
+            .folder => |f| {
+                qa.mark(ir, "guild-folder:{d}", .{f.id});
+                beginDockDrag(ctx, .folder, f.id, 0, hb);
+                const dropped = releaseDockOn(ctx, hb, .{ .folder = f.id }, cx, size);
+                if (hb.clicked and !dropped) {
+                    if (ctx.st.open_folders.contains(f.id)) {
+                        _ = ctx.st.open_folders.remove(f.id);
+                    } else {
+                        ctx.st.open_folders.clearRetainingCapacity();
+                        ctx.st.open_folders.put(ctx.st.gpa, f.id, {}) catch {};
+                    }
+                }
+                if (hb.right) ctx.popup(.{ .menu = .{ .kind = .guild_folder, .id = f.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
+                var selected = false;
+                for (f.guilds) |gid| if (ctx.st.guild == gid) {
+                    selected = true;
+                    break;
+                };
+                dockFolderIcon(ctx, dl, f, ir, shape, selected);
+                const label = if (f.name.len > 0) f.name else i18n.tr("Pasta", "Folder");
+                if (hb.hovered) tooltip(ctx, @truncate(f.id *% 13 +% 7000), ir.right() + 12, ir.y + size / 2, label, true);
+                if (ctx.st.open_folders.contains(f.id) and open_folder == null) {
+                    open_folder = f;
+                    open_cx = cx;
+                }
+            },
         }
         x += base + gap;
     }
-}
 
-/// Lista vertical com ícone + nome (estilo "workspaces" do Slack).
-fn list(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
-    const fam = ctx.familyFor(n);
-    const size = d.pnum(n, "size", 26);
-    const row_h = size + 10;
-    const dl = d.beginRegion(ctx, "##guildlist", r, c.ImGuiWindowFlags_NoScrollbar);
-    const o = c.ImGui_GetCursorScreenPos();
-    var y = o.y + 6;
-    var fb: [256]*types.Guild = undefined;
-    const order = flatOrder(ctx, &fb);
-    for (0..order.len + 1) |i| {
-        const g: ?*types.Guild = if (i == 0) null else order[i - 1];
-        const gid: types.Id = if (g) |x| x.id else 0;
-        const rr: d.Rect = .{ .x = r.x + 8, .y = y, .w = r.w - 16, .h = row_h - 2 };
-        const hb = d.hit(ctx, 4000 + i, rr);
-        qa.mark(rr, "guild:{d}", .{gid});
-        // Na lista, o ícone é o quadradinho do começo da linha.
-        if (gid == 0) mascote_pet.anchorIn(.dm_icon, .{ .x = rr.x, .y = rr.y, .w = rr.h, .h = rr.h }, r, ctx.now_ms);
-        if (hb.clicked) ctx.act(.{ .select_guild = gid });
-        if (hb.right) if (g) |gg| ctx.popup(.{ .menu = .{ .kind = .guild, .id = gg.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
-        const sel = ctx.st.guild == gid;
-        const k = anim.to(anim.id("glist", i), if (sel) 1 else if (hb.hovered) 0.5 else 0, 22);
-        if (k > 0.01) d.rect(dl, rr, ctx.col(.selected).alpha(k), ctx.th.radius);
-        const cy = rr.y + rr.h / 2;
-        if (g) |gg| glyph(ctx, dl, gg, rr.x + 6 + size / 2, cy, size, shape, sel or hb.hovered) else {
-            d.rect(dl, .{ .x = rr.x + 6, .y = cy - size / 2, .w = size, .h = size }, ctx.col(.accent), w.shapeRadius(shape, size));
+    // A pasta aberta aparece numa bandeja acima do Dock. Os membros continuam
+    // selecionáveis e também podem ser arrastados para fora ou para outra pasta.
+    if (open_folder) |f| if (f.guilds.len > 0) {
+        const mini = base * 0.72;
+        const step = mini + 8;
+        const cols = @min(f.guilds.len, 10);
+        const rows = (f.guilds.len + cols - 1) / cols;
+        const panel_w = @as(f32, @floatFromInt(cols)) * step + 16;
+        const panel_h = @as(f32, @floatFromInt(rows)) * step + 16;
+        const max_x = @max(bg.x + 4, bg.right() - panel_w - 4);
+        const panel_x = std.math.clamp(open_cx - panel_w / 2, bg.x + 4, max_x);
+        const panel_y = @max(r.y + 4, bg.y - panel_h - 10);
+        const panel: d.Rect = .{ .x = panel_x, .y = panel_y, .w = panel_w, .h = panel_h };
+        d.shadow(dl, panel, 12, 10, ctx.col(.shadow));
+        d.rect(dl, panel, ctx.col(.overlay), 14);
+        d.border(dl, panel, ctx.col(.border), 14, 1);
+        for (f.guilds, 0..) |gid, j| {
+            const g = ctx.store.guild(gid) orelse continue;
+            const col = j % cols;
+            const row = j / cols;
+            const ix = panel.x + 8 + @as(f32, @floatFromInt(col)) * step;
+            const iy = panel.y + 8 + @as(f32, @floatFromInt(row)) * step;
+            const ir: d.Rect = .{ .x = ix, .y = iy, .w = mini, .h = mini };
+            const hb = d.hit(ctx, 6000 + j, ir);
+            qa.mark(ir, "guild-folder-member:{d}", .{gid});
+            beginDockDrag(ctx, .guild, gid, f.id, hb);
+            const dropped = releaseDockOn(ctx, hb, .{ .guild = .{ .id = gid, .folder = f.id } }, ix + mini / 2, mini);
+            if (hb.clicked and !dropped) ctx.act(.{ .select_guild = gid });
+            if (hb.right) ctx.popup(.{ .menu = .{ .kind = .guild, .id = gid, .x = ctx.mouse.x, .y = ctx.mouse.y } });
+            glyph(ctx, dl, g, ix + mini / 2, iy + mini / 2, mini, shape, ctx.st.guild == gid);
+            if (g.mentions > 0) badge(ctx, dl, ir.right() + 1, ir.y - 1, g.mentions);
+            if (ctx.st.guild == gid) d.circle(dl, ix + mini / 2, ir.bottom() + 2, 2, ctx.col(.accent));
+            if (hb.hovered) tooltip(ctx, 6100 + j, ir.right() + 8, iy + mini / 2, g.name, true);
         }
-        const name = if (g) |gg| gg.name else i18n.tr("Mensagens diretas", "Direct Messages");
-        const unread = if (g) |gg| gg.unread else false;
-        _ = d.textClipped(dl, fam.get(if (sel or unread) .semibold else .medium), 14, rr.x + size + 14, d.centerY(rr, 14), if (sel) ctx.col(.text) else ctx.col(.muted), name, rr.w - size - 40);
-        if (g) |gg| if (gg.mentions > 0) {
-            var buf: [8]u8 = undefined;
-            const t = std.fmt.bufPrint(&buf, "{d}", .{gg.mentions}) catch "";
-            const tw = d.width(fam.get(.bold), 11, t);
-            const br: d.Rect = .{ .x = rr.right() - tw - 16, .y = cy - 9, .w = tw + 10, .h = 18 };
-            d.rect(dl, br, ctx.col(.danger), 9);
-            d.text(dl, fam.get(.bold), 11, br.x + 5, d.centerY(br, 11), d.Rgba.white, t);
-        };
-        y += row_h;
-    }
-    d.endRegion(ctx, y + 6, r.x);
+    };
+    if (c.ImGui_IsMouseReleased(0)) ctx.st.dock_drag = null;
 }

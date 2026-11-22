@@ -8,7 +8,18 @@ pub const Settings = @import("settings_state.zig").Settings;
 /// `voice_move`: os canais de voz para onde dá para mover alguém (id = a pessoa).
 /// `plugin_choices`: a segunda lista de uma entrada de plugin (id = a mensagem ou a pessoa).
 /// `tabs`: o botão direito na barra de abas, com os conjuntos de abas (ui/conjuntos.zig).
-pub const MenuKind = enum { message, user, channel, guild, status, voice_move, thread_delete, guild_leave, plugin_choices, notif, block_confirm, group_leave, pet, tabs };
+pub const MenuKind = enum { message, user, channel, guild, guild_folder, status, voice_move, thread_delete, guild_leave, plugin_choices, notif, block_confirm, group_leave, pet, tabs };
+
+pub const DockDragKind = enum { guild, folder };
+pub const DockDrag = struct {
+    kind: DockDragKind,
+    id: u64,
+    /// Servidor arrastado para fora de uma pasta aberta (0 = item solto).
+    folder: u64 = 0,
+    start_x: f32,
+    start_y: f32,
+    moved: bool = false,
+};
 
 /// O que o menu rápido de dispositivos mostra (ui/device_menu.zig).
 pub const DeviceMenu = enum { mic, out, both };
@@ -68,6 +79,8 @@ pub const Popup = union(enum) {
     devices: struct { which: DeviceMenu, x: f32, y: f32 },
     /// O nome de um conjunto de abas novo, ou do conjunto `rename` (ui/conjuntos.zig).
     tab_set_name: struct { rename: ?usize = null },
+    /// Renomear uma pasta de servidores do Discord.
+    guild_folder_name: struct { id: u64 },
     /// "Exportar conversa…" (ui/exportar.zig).
     exportar: struct { channel: Id },
 };
@@ -216,6 +229,7 @@ pub const State = struct {
     open_folders: std.AutoHashMapUnmanaged(u64, void) = .empty,
     /// Horizontal scroll offset of the Cupertino Dock (pixels).
     dock_scroll: f32 = 0,
+    dock_drag: ?DockDrag = null,
     input: [2000]u8 = @splat(0),
     focus_input: bool = true,
     scroll: std.AutoHashMapUnmanaged(Id, Scroll) = .empty,

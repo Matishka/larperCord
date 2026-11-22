@@ -1,13 +1,22 @@
 # Windows-only build for the Cupertino Dock scroll implementation.
-name: Build larperCord Dock Scroll for Windows
+name: Build larperCord Discord-Synced Dock Folders for Windows
 
 on:
   push:
-    branches: [main]
+    branches: [main, feat/discord-synced-dock-folders]
     paths:
       - '.github/workflows/build-dock-scroll.yml'
       - 'src/ui/comp_rail.zig'
       - 'src/ui/state.zig'
+      - 'src/ui/popup.zig'
+      - 'src/ui/guild_folder_name.zig'
+      - 'src/core/guild_layout.zig'
+      - 'src/core/event.zig'
+      - 'src/net/settings_proto.zig'
+      - 'src/net/discord.zig'
+      - 'src/net/fake_gateway.zig'
+      - 'src/app.zig'
+      - 'src/tests.zig'
       - 'tools/windows_deps.sh'
       - 'build.zig'
   workflow_dispatch:
@@ -68,7 +77,7 @@ jobs:
           2. Keep larpercord.exe and all DLL files together.
           3. Run larpercord.exe.
 
-          The Cupertino Dock horizontal scrolling change is included.
+          Cupertino Dock drag-and-drop, server folders and Discord account synchronization are included.
           SHA256SUMS contains hashes for the executable and DLL files.
           '@ | Set-Content -Path (Join-Path $dist 'README-Windows.txt') -Encoding utf8
 
@@ -84,7 +93,7 @@ jobs:
       - name: Upload Windows package
         uses: actions/upload-artifact@v4
         with:
-          name: larperCord-Cupertino-Dock-scroll-Windows
+          name: larperCord-Discord-Synced-Dock-Folders-Windows
           path: dist/
           if-no-files-found: error
           retention-days: 14

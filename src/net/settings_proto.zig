@@ -12,6 +12,7 @@
 //! `user_settings.guild_folders`; `fromJson` lê essa.
 const std = @import("std");
 const jsonx = @import("jsonx.zig");
+const types = @import("../core/types.zig");
 
 pub const Error = error{
     /// A mensagem acaba no meio de um campo.
@@ -333,6 +334,53 @@ const TestEnc = struct {
     }
 };
 
+
+/// PATCH parcial de `PreloadedUserSettings`: envia apenas o campo 14
+/// (`guild_folders`) e atualiza `guild_positions` legado quando a conta ainda o usa.
+/// Os outros campos da conta nunca são regravados.
+pub fn guildFoldersPatchBody(gpa: std.mem.Allocator, raw: []const u8, folders: []const types.GuildFolder, version: ?u32) Error![]u8 {
+    const current = try fromProto(gpa, raw);
+    defer current.deinit(gpa);
+
+    var guild_folders: TestEnc = .{ .gpa = gpa };
+    defer guild_folders.deinit();
+    for (folders) |f| {
+        var folder: TestEnc = .{ .gpa = gpa };
+        defer folder.deinit();
+        if (f.guilds.len > 0) try folder.fieldPacked64(1, f.guilds);
+        if (f.id != 0) try folder.fieldWrapInt(2, f.id);
+        if (f.name.len > 0) try folder.fieldWrapStr(3, f.name);
+        if (f.color != 0) try folder.fieldWrapInt(4, f.color);
+        try guild_folders.fieldBytes(1, folder.out.items);
+    }
+    if (current.positions.len > 0) {
+        // guild_positions é legado, mas se a conta ainda o usa, mantenha-o
+        // alinhado com a nova ordem de pastas em vez de regravar posições antigas.
+        var positions: std.ArrayList(u64) = .empty;
+        defer positions.deinit(gpa);
+        for (folders) |f| try positions.appendSlice(gpa, f.guilds);
+        try guild_folders.fieldPacked64(2, positions.items);
+    }
+
+    var partial: TestEnc = .{ .gpa = gpa };
+    defer partial.deinit();
+    try partial.fieldBytes(14, guild_folders.out.items);
+
+    const enc = std.base64.standard.Encoder;
+    const encoded = try gpa.alloc(u8, enc.calcSize(partial.out.items.len));
+    defer gpa.free(encoded);
+    _ = enc.encode(encoded, partial.out.items);
+
+    var body: std.ArrayList(u8) = .empty;
+    errdefer body.deinit(gpa);
+    try body.appendSlice(gpa, "{\"settings\":\"");
+    try body.appendSlice(gpa, encoded);
+    try body.append(gpa, '"');
+    if (version) |v| try body.print(gpa, ",\"required_data_version\":{d}", .{v});
+    try body.append(gpa, '}');
+    return body.toOwnedSlice(gpa);
+}
+
 /// `PreloadedUserSettings` de exemplo; `range` recebe onde fica o campo 14.
 fn testSettings(a: std.mem.Allocator, range: *[2]usize) ![]u8 {
     // Pasta de verdade: id, nome, cor e 3 servidores empacotados.
@@ -512,4 +560,31 @@ test "forma antiga em JSON (user_settings.guild_folders)" {
     const none = try fromJson(a, .null);
     defer none.deinit(a);
     try std.testing.expectEqual(@as(usize, 0), none.folders.len);
+}
+
+
+test "PATCH de pastas envia somente o campo 14 e alinha guild_positions" {
+    const a = std.testing.allocator;
+    var range: [2]usize = undefined;
+    const src = try testSettings(a, &range);
+    defer a.free(src);
+    const folders = [_]types.GuildFolder{
+        .{ .id = 777, .name = "New", .color = 0x123456, .guilds = &.{ 111, 999 } },
+    };
+    const body = try guildFoldersPatchBody(a, src, &folders, 42);
+    defer a.free(body);
+    const value = try std.json.parseFromSliceLeaky(std.json.Value, a, body, .{});
+    try std.testing.expectEqual(@as(?i64, 42), jsonx.int(jsonx.get(value, "required_data_version")));
+    const b64 = jsonx.str(jsonx.get(value, "settings")) orelse return error.InvalidBase64;
+    const dec = std.base64.standard.Decoder;
+    const raw = try a.alloc(u8, try dec.calcSizeForSlice(b64));
+    defer a.free(raw);
+    try dec.decode(raw, b64);
+    const layout = try fromProto(a, raw);
+    defer layout.deinit(a);
+    try std.testing.expectEqual(@as(usize, 1), layout.folders.len);
+    try std.testing.expectEqual(@as(u64, 777), layout.folders[0].id);
+    try std.testing.expectEqualStrings("New", layout.folders[0].name);
+    try std.testing.expectEqualSlices(u64, &.{ 111, 999 }, layout.folders[0].guilds);
+    try std.testing.expectEqualSlices(u64, &.{ 111, 999 }, layout.positions);
 }

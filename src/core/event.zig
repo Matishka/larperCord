@@ -360,6 +360,8 @@ pub const Command = union(enum) {
     delete_thread: Id,
     /// Editar servidor ou grupo: só o que mudou (null/keep = deixa como está).
     edit_place: EditPlace,
+    /// Ordem, pastas, nomes e cores dos servidores (salvos no settings-proto do Discord).
+    guild_layout: []types.GuildFolder,
     react: struct { channel: Id, id: Id, emoji: types.Reaction, add: bool },
     /// A última página de um canal. `members`: o servidor da conversa que se está vendo;
     /// o gateway pede (op 8) os membros dos autores da página que ainda não conhece,
@@ -498,6 +500,8 @@ pub const Action = union(enum) {
     /// Aceitar/recusar pedido de mensagem, pôr/tirar gente do grupo, sair dele.
     social: Social,
     select_guild: Id,
+    /// Mudança local na ordem/pastas; o App aplica otimisticamente e sincroniza no gateway.
+    guild_layout: @import("guild_layout.zig").Change,
     select_channel: Id,
     close_tab: usize,
     focus_tab: usize,
