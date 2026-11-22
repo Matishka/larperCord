@@ -273,44 +273,44 @@ const Reader = struct {
 
 // ---------------------------------------------------------------------------
 
-/// Codificador mínimo, só para montar mensagens nos testes.
-const TestEnc = struct {
+/// Codificador mínimo para mensagens protobuf do settings-proto.
+const ProtoWriter = struct {
     gpa: std.mem.Allocator,
     out: std.ArrayList(u8) = .empty,
 
-    fn deinit(e: *TestEnc) void {
+    fn deinit(e: *ProtoWriter) void {
         e.out.deinit(e.gpa);
     }
-    fn varint(e: *TestEnc, v: u64) !void {
+    fn varint(e: *ProtoWriter, v: u64) !void {
         var x = v;
         while (x >= 0x80) : (x >>= 7) try e.out.append(e.gpa, @as(u8, @truncate(x)) | 0x80);
         try e.out.append(e.gpa, @truncate(x));
     }
-    fn key(e: *TestEnc, field: u64, wire: u3) !void {
+    fn key(e: *ProtoWriter, field: u64, wire: u3) !void {
         try e.varint(field << 3 | wire);
     }
-    fn fieldVarint(e: *TestEnc, field: u64, v: u64) !void {
+    fn fieldVarint(e: *ProtoWriter, field: u64, v: u64) !void {
         try e.key(field, 0);
         try e.varint(v);
     }
-    fn fieldFixed64(e: *TestEnc, field: u64, v: u64) !void {
+    fn fieldFixed64(e: *ProtoWriter, field: u64, v: u64) !void {
         try e.key(field, 1);
         var b: [8]u8 = undefined;
         std.mem.writeInt(u64, &b, v, .little);
         try e.out.appendSlice(e.gpa, &b);
     }
-    fn fieldFixed32(e: *TestEnc, field: u64, v: u32) !void {
+    fn fieldFixed32(e: *ProtoWriter, field: u64, v: u32) !void {
         try e.key(field, 5);
         var b: [4]u8 = undefined;
         std.mem.writeInt(u32, &b, v, .little);
         try e.out.appendSlice(e.gpa, &b);
     }
-    fn fieldBytes(e: *TestEnc, field: u64, data: []const u8) !void {
+    fn fieldBytes(e: *ProtoWriter, field: u64, data: []const u8) !void {
         try e.key(field, 2);
         try e.varint(data.len);
         try e.out.appendSlice(e.gpa, data);
     }
-    fn fieldPacked64(e: *TestEnc, field: u64, vals: []const u64) !void {
+    fn fieldPacked64(e: *ProtoWriter, field: u64, vals: []const u64) !void {
         try e.key(field, 2);
         try e.varint(vals.len * 8);
         for (vals) |v| {
@@ -320,14 +320,14 @@ const TestEnc = struct {
         }
     }
     /// Wrapper do google.protobuf com um varint no campo 1.
-    fn fieldWrapInt(e: *TestEnc, field: u64, v: u64) !void {
-        var w: TestEnc = .{ .gpa = e.gpa };
+    fn fieldWrapInt(e: *ProtoWriter, field: u64, v: u64) !void {
+        var w: ProtoWriter = .{ .gpa = e.gpa };
         defer w.deinit();
         try w.fieldVarint(1, v);
         try e.fieldBytes(field, w.out.items);
     }
-    fn fieldWrapStr(e: *TestEnc, field: u64, s: []const u8) !void {
-        var w: TestEnc = .{ .gpa = e.gpa };
+    fn fieldWrapStr(e: *ProtoWriter, field: u64, s: []const u8) !void {
+        var w: ProtoWriter = .{ .gpa = e.gpa };
         defer w.deinit();
         try w.fieldBytes(1, s);
         try e.fieldBytes(field, w.out.items);
@@ -342,10 +342,10 @@ pub fn guildFoldersPatchBody(gpa: std.mem.Allocator, raw: []const u8, folders: [
     const current = try fromProto(gpa, raw);
     defer current.deinit(gpa);
 
-    var guild_folders: TestEnc = .{ .gpa = gpa };
+    var guild_folders: ProtoWriter = .{ .gpa = gpa };
     defer guild_folders.deinit();
     for (folders) |f| {
-        var folder: TestEnc = .{ .gpa = gpa };
+        var folder: ProtoWriter = .{ .gpa = gpa };
         defer folder.deinit();
         if (f.guilds.len > 0) try folder.fieldPacked64(1, f.guilds);
         if (f.id != 0) try folder.fieldWrapInt(2, f.id);
@@ -362,7 +362,7 @@ pub fn guildFoldersPatchBody(gpa: std.mem.Allocator, raw: []const u8, folders: [
         try guild_folders.fieldPacked64(2, positions.items);
     }
 
-    var partial: TestEnc = .{ .gpa = gpa };
+    var partial: ProtoWriter = .{ .gpa = gpa };
     defer partial.deinit();
     try partial.fieldBytes(14, guild_folders.out.items);
 
@@ -384,7 +384,7 @@ pub fn guildFoldersPatchBody(gpa: std.mem.Allocator, raw: []const u8, folders: [
 /// `PreloadedUserSettings` de exemplo; `range` recebe onde fica o campo 14.
 fn testSettings(a: std.mem.Allocator, range: *[2]usize) ![]u8 {
     // Pasta de verdade: id, nome, cor e 3 servidores empacotados.
-    var f1: TestEnc = .{ .gpa = a };
+    var f1: ProtoWriter = .{ .gpa = a };
     defer f1.deinit();
     try f1.fieldPacked64(1, &.{ 111, 222, 333 });
     try f1.fieldWrapInt(2, 4567);
@@ -393,18 +393,18 @@ fn testSettings(a: std.mem.Allocator, range: *[2]usize) ![]u8 {
     try f1.fieldFixed64(9, 0xdead); // desconhecido
 
     // Servidor solto: sem id, guild_ids sem empacotar.
-    var f2: TestEnc = .{ .gpa = a };
+    var f2: ProtoWriter = .{ .gpa = a };
     defer f2.deinit();
     try f2.fieldFixed64(1, 999);
 
     // Pasta sem nome nem cor, guild_ids misturando as duas formas.
-    var f3: TestEnc = .{ .gpa = a };
+    var f3: ProtoWriter = .{ .gpa = a };
     defer f3.deinit();
     try f3.fieldFixed64(1, 10);
     try f3.fieldPacked64(1, &.{ 20, 30 });
     try f3.fieldWrapInt(2, 8);
 
-    var gf: TestEnc = .{ .gpa = a };
+    var gf: ProtoWriter = .{ .gpa = a };
     defer gf.deinit();
     try gf.fieldBytes(1, f1.out.items);
     try gf.fieldFixed32(7, 1234); // desconhecido no meio
@@ -414,11 +414,11 @@ fn testSettings(a: std.mem.Allocator, range: *[2]usize) ![]u8 {
     try gf.fieldFixed64(2, 222);
 
     // Antes do 14: mensagem aninhada (versions), varint, fixed32 e campo de número alto.
-    var nested: TestEnc = .{ .gpa = a };
+    var nested: ProtoWriter = .{ .gpa = a };
     defer nested.deinit();
     try nested.fieldVarint(1, 300);
     try nested.fieldBytes(3, "\x08\x01");
-    var top: TestEnc = .{ .gpa = a };
+    var top: ProtoWriter = .{ .gpa = a };
     errdefer top.deinit();
     try top.fieldBytes(1, nested.out.items);
     try top.fieldVarint(8, std.math.maxInt(u64));
