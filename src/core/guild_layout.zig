@@ -341,6 +341,43 @@ test "create, move into, rename, recolor and delete Discord folders" {
     try std.testing.expectEqual(@as(Id, 11), deleted[0].guilds[0]);
 }
 
+test "moving a server out of a folder and reordering folders preserves every guild" {
+    const a = std.testing.allocator;
+    const guilds = [_]types.Guild{
+        .{ .id = 1, .name = "A", .acronym = "A" },
+        .{ .id = 2, .name = "B", .acronym = "B" },
+        .{ .id = 3, .name = "C", .acronym = "C" },
+        .{ .id = 4, .name = "D", .acronym = "D" },
+    };
+    const current = [_]types.GuildFolder{
+        .{ .id = 10, .name = "Games", .color = 0x123456, .guilds = &.{ 1, 2 } },
+        .{ .id = 0, .name = "", .color = 0, .guilds = &.{3} },
+        .{ .id = 20, .name = "Work", .color = 0, .guilds = &.{4} },
+    };
+    const moved = try apply(a, &guilds, &current, .{ .move_guild = .{
+        .guild = 1,
+        .target = .{ .guild = .{ .id = 3 } },
+        .place = .after,
+    } });
+    defer free(a, moved);
+    try std.testing.expectEqual(@as(usize, 3), moved.len);
+    try std.testing.expectEqual(@as(u64, 10), moved[0].id);
+    try std.testing.expectEqualSlices(Id, &.{2}, moved[0].guilds);
+    try std.testing.expectEqual(@as(Id, 3), moved[1].guilds[0]);
+    try std.testing.expectEqual(@as(Id, 1), moved[2].guilds[0]);
+
+    const reordered = try apply(a, &guilds, moved, .{ .move_folder = .{
+        .folder = 20,
+        .target = .{ .folder = 10 },
+        .place = .before,
+    } });
+    defer free(a, reordered);
+    try std.testing.expectEqual(@as(u64, 20), reordered[0].id);
+    try std.testing.expectEqual(@as(u64, 10), reordered[1].id);
+    try std.testing.expectEqual(@as(Id, 3), reordered[2].guilds[0]);
+    try std.testing.expectEqual(@as(Id, 1), reordered[3].guilds[0]);
+}
+
 test "dragging a server reorders it around another loose server" {
     const a = std.testing.allocator;
     const guilds = [_]types.Guild{
