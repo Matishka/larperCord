@@ -3650,6 +3650,16 @@ pub const Gateway = struct {
         return decodeSettings(a, j.str(j.get(v, "settings")) orelse return null);
     }
 
+    /// PreloadedUserSettings (type 1): guild folders and account-wide settings.
+    /// This is distinct from FrecencyUserSettings (type 2), used for GIF favorites.
+    fn preloadedSettings(g: *Gateway, a: std.mem.Allocator) ?[]u8 {
+        var resp = g.request("GET", "/users/@me/settings-proto/1", null) orelse return null;
+        defer resp.body.deinit(alloc);
+        if (resp.status != 200) return null;
+        const v = std.json.parseFromSliceLeaky(Value, a, resp.body.items, .{}) catch return null;
+        return decodeSettings(a, j.str(j.get(v, "settings")) orelse return null);
+    }
+
     fn decodeSettings(a: std.mem.Allocator, b64: []const u8) ?[]u8 {
         const dec = std.base64.standard.Decoder;
         const raw = a.alloc(u8, dec.calcSizeForSlice(b64) catch return null) catch return null;
@@ -3754,7 +3764,7 @@ pub const Gateway = struct {
         const a = arena.allocator();
         var tries: u8 = 0;
         while (true) : (tries += 1) {
-            const raw = g.frecency(a) orelse {
+            const raw = g.preloadedSettings(a) orelse {
                 g.notice("não foi possível ler as configurações do Discord", "couldn't read Discord settings", .{});
                 return;
             };
@@ -3764,7 +3774,7 @@ pub const Gateway = struct {
                 g.emitFolderBytes(a, raw);
                 return;
             };
-            var resp = g.request("PATCH", "/users/@me/settings-proto/2", body) orelse {
+            var resp = g.request("PATCH", "/users/@me/settings-proto/1", body) orelse {
                 g.notice("sem conexão: a ordem dos servidores não foi salva", "no connection: server layout wasn't saved", .{});
                 g.emitFolderBytes(a, raw);
                 return;
@@ -3780,7 +3790,7 @@ pub const Gateway = struct {
             if (stale) {
                 if (tries == 0) continue;
                 g.notice("as configurações mudaram em outro aparelho: tente novamente", "settings changed on another device: try again", .{});
-                const latest = g.frecency(a) orelse raw;
+                const latest = g.preloadedSettings(a) orelse raw;
                 g.emitFolderBytes(a, latest);
                 return;
             }
