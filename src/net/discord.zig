@@ -1193,6 +1193,17 @@ pub const Gateway = struct {
         g.emit(.{ .my_limits = .{ .guild = gid, .timeout_until_ms = l.timeout_until_ms, .member_flags = l.flags } });
     }
 
+    /// Uma resposta do PATCH pode trazer apenas o fragmento alterado do protobuf.
+    /// Só a usamos como estado completo se ela reproduzir exatamente o layout enviado.
+    fn sameFolderLayout(actual: []const settings_proto.Folder, expected: []const types.GuildFolder) bool {
+        if (actual.len != expected.len) return false;
+        for (actual, expected) |a, b| {
+            if (a.id != b.id or a.color != b.color) return false;
+            if (!std.mem.eql(u8, a.name, b.name) or !std.mem.eql(types.Id, a.guilds, b.guilds)) return false;
+        }
+        return true;
+    }
+
     /// Passa as pastas para o Store (só se vieram: uma atualização parcial
     /// sem pastas não apaga as que já temos).
     fn emitFolderList(g: *Gateway, folders: anytype) void {
@@ -1577,7 +1588,9 @@ pub const Gateway = struct {
             const st = j.get(d, "settings") orelse return;
             if ((j.int(j.get(st, "type")) orelse 0) != 1) return;
             const b64 = j.str(j.get(st, "proto")) orelse return;
-            const partial = if (j.get(d, "partial")) |pv| pv == .bool and pv.bool else false;
+            // Sem o sinalizador, trate o evento como parcial: só READY é uma
+            // fotografia completa garantida das pastas da conta.
+            const partial = if (j.get(d, "partial")) |pv| pv == .bool and pv.bool else true;
             conta_net.onProtoUpdate(g, b64, partial);
             if (settings_proto.fromProtoBase64(alloc, b64)) |layout| g.emitFolders(layout, partial) else |_| {}
             return;
@@ -3801,7 +3814,13 @@ pub const Gateway = struct {
                         g.notice("pastas salvas ✓", "folders saved ✓", .{});
                         return;
                     };
-                    g.emitFolderList(layout.folders);
+                    // Não substitua o layout inteiro por uma resposta parcial/vazia:
+                    // isso fazia todas as pastas sumirem logo após criar uma pasta.
+                    if (sameFolderLayout(layout.folders, folders)) {
+                        g.emitFolderList(layout.folders);
+                    } else {
+                        g.emitFolderList(folders);
+                    }
                     layout.deinit(a);
                 } else g.emitFolderList(folders);
             } else g.emitFolderList(folders);
