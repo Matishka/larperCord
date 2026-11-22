@@ -1723,19 +1723,22 @@ pub const App = struct {
                     st.showToast(now(), true, "não foi possível reorganizar os servidores", "couldn't reorganize servers", .{});
                     return;
                 };
-                const command_folders = if (app.net == .real) guild_layout.clone(ca, updated) catch {
+                if (app.net == .real) {
+                    // Só mostra a nova ordem depois de o Discord confirmar a gravação.
+                    // Se a leitura ou o PATCH falhar, a interface continua com o estado anterior.
+                    const command_folders = guild_layout.clone(ca, updated) catch {
+                        guild_layout.free(ca, updated);
+                        st.showToast(now(), true, "não foi possível preparar a sincronização", "couldn't prepare the sync", .{});
+                        return;
+                    };
                     guild_layout.free(ca, updated);
-                    st.showToast(now(), true, "não foi possível preparar a sincronização", "couldn't prepare the sync", .{});
-                    return;
-                } else null;
-                app.store.apply(.{ .guild_folders = updated }, now()) catch {
-                    if (command_folders) |folders| guild_layout.free(ca, folders);
-                    guild_layout.free(ca, updated);
-                    return;
-                };
-                if (command_folders) |folders| {
-                    app.cmd(.{ .guild_layout = folders });
+                    app.cmd(.{ .guild_layout = command_folders });
                     st.showToast(now(), false, "sincronizando pastas com o Discord…", "syncing folders with Discord…", .{});
+                } else {
+                    app.store.apply(.{ .guild_folders = updated }, now()) catch {
+                        guild_layout.free(ca, updated);
+                        return;
+                    };
                 }
             },
             .set_status => |status| @import("app_conta.zig").setStatus(app, status, 0, false),
