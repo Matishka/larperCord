@@ -651,3 +651,46 @@ fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
     };
     if (c.ImGui_IsMouseReleased(0)) ctx.st.dock_drag = null;
 }
+
+/// Lista vertical com ícone + nome (estilo "workspaces" do Slack).
+fn list(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
+    const fam = ctx.familyFor(n);
+    const size = d.pnum(n, "size", 26);
+    const row_h = size + 10;
+    const dl = d.beginRegion(ctx, "##guildlist", r, c.ImGuiWindowFlags_NoScrollbar);
+    const o = c.ImGui_GetCursorScreenPos();
+    var y = o.y + 6;
+    var fb: [256]*types.Guild = undefined;
+    const order = flatOrder(ctx, &fb);
+    for (0..order.len + 1) |i| {
+        const g: ?*types.Guild = if (i == 0) null else order[i - 1];
+        const gid: types.Id = if (g) |x| x.id else 0;
+        const rr: d.Rect = .{ .x = r.x + 8, .y = y, .w = r.w - 16, .h = row_h - 2 };
+        const hb = d.hit(ctx, 4000 + i, rr);
+        qa.mark(rr, "guild:{d}", .{gid});
+        // Na lista, o ícone é o quadradinho do começo da linha.
+        if (gid == 0) mascote_pet.anchorIn(.dm_icon, .{ .x = rr.x, .y = rr.y, .w = rr.h, .h = rr.h }, r, ctx.now_ms);
+        if (hb.clicked) ctx.act(.{ .select_guild = gid });
+        if (hb.right) if (g) |gg| ctx.popup(.{ .menu = .{ .kind = .guild, .id = gg.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
+        const sel = ctx.st.guild == gid;
+        const k = anim.to(anim.id("glist", i), if (sel) 1 else if (hb.hovered) 0.5 else 0, 22);
+        if (k > 0.01) d.rect(dl, rr, ctx.col(.selected).alpha(k), ctx.th.radius);
+        const cy = rr.y + rr.h / 2;
+        if (g) |gg| glyph(ctx, dl, gg, rr.x + 6 + size / 2, cy, size, shape, sel or hb.hovered) else {
+            d.rect(dl, .{ .x = rr.x + 6, .y = cy - size / 2, .w = size, .h = size }, ctx.col(.accent), w.shapeRadius(shape, size));
+        }
+        const name = if (g) |gg| gg.name else i18n.tr("Mensagens diretas", "Direct Messages");
+        const unread = if (g) |gg| gg.unread else false;
+        _ = d.textClipped(dl, fam.get(if (sel or unread) .semibold else .medium), 14, rr.x + size + 14, d.centerY(rr, 14), if (sel) ctx.col(.text) else ctx.col(.muted), name, rr.w - size - 40);
+        if (g) |gg| if (gg.mentions > 0) {
+            var buf: [8]u8 = undefined;
+            const t = std.fmt.bufPrint(&buf, "{d}", .{gg.mentions}) catch "";
+            const tw = d.width(fam.get(.bold), 11, t);
+            const br: d.Rect = .{ .x = rr.right() - tw - 16, .y = cy - 9, .w = tw + 10, .h = 18 };
+            d.rect(dl, br, ctx.col(.danger), 9);
+            d.text(dl, fam.get(.bold), 11, br.x + 5, d.centerY(br, 11), d.Rgba.white, t);
+        };
+        y += row_h;
+    }
+    d.endRegion(ctx, y + 6, r.x);
+}
