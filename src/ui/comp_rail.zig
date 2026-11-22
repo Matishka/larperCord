@@ -15,7 +15,8 @@ const anim = @import("anim.zig");
 const w = @import("widgets.zig");
 const types = @import("../core/types.zig");
 const guild_layout = @import("../core/guild_layout.zig");
-const DockDragKind = @import("state.zig").DockDragKind;
+const state = @import("state.zig");
+const DockDragKind = state.DockDragKind;
 const i18n = @import("i18n.zig");
 const icons = @import("icons.zig");
 
@@ -340,18 +341,32 @@ fn badge(ctx: *d.Ctx, dl: *c.ImDrawList, right: f32, top: f32, count: u16) void 
 }
 
 pub fn tooltip(ctx: *d.Ctx, n: usize, x: f32, cy: f32, label: []const u8, show: bool) void {
+    // Tooltips are distracting while a context menu or dialog is active.
+    if (ctx.st.popup != .none) return;
     const k = anim.to(anim.id("tip", n), if (show) 1 else 0, 26);
     if (k < 0.02) return;
+
     const fg = ctx.fg;
-    const fs: f32 = 15;
+    const fs: f32 = 14;
     const font = ctx.ui.get(.semibold);
-    const tw = d.width(font, fs, label);
-    const ox = x - (1 - k) * 8;
-    const r: d.Rect = .{ .x = ox, .y = cy - 17, .w = tw + 24, .h = 34 };
-    d.shadow(fg, r, 6, 8, ctx.col(.shadow).alpha(k));
-    d.rect(fg, r, ctx.col(.overlay).alpha(k), 6);
-    c.ImDrawList_AddTriangleFilled(fg, d.v(ox - 5, cy), d.v(ox + 1, cy - 6), d.v(ox + 1, cy + 6), ctx.col(.overlay).col(k));
-    d.text(fg, font, fs, ox + 12, cy - 9.5, ctx.col(.text).alpha(k), label);
+    const max_w = @max(64.0, ctx.win.w - 32);
+    const text_w = @min(d.width(font, fs, label), max_w - 24);
+    const width = text_w + 24;
+    const left = ctx.win.x + 8;
+    const right = ctx.win.right() - width - 8;
+
+    // Prefer the right side of the icon, but flip to the left near the window edge.
+    var target_x = x + 4;
+    if (target_x > right) target_x = x - width - 8;
+    target_x = std.math.clamp(target_x, left, @max(left, right));
+    const ox = target_x - (1 - k) * 5;
+    const oy = std.math.clamp(cy - 17, ctx.win.y + 8, ctx.win.bottom() - 42);
+    const tr: d.Rect = .{ .x = ox, .y = oy, .w = width, .h = 34 };
+
+    d.shadow(fg, tr, 7, 9, ctx.col(.shadow).alpha(k));
+    d.rect(fg, tr, ctx.col(.sidebar).alpha(0.98 * k), 7);
+    d.border(fg, tr, ctx.col(.border).mix(ctx.col(.text), 0.18).alpha(k), 7, 1);
+    _ = d.textClipped(fg, font, fs, ox + 12, oy + 8.5, ctx.col(.text).alpha(k), label, text_w);
 }
 
 /// Estilo terminal: `[1:LC] 2:RH 3:Z ...`
@@ -523,6 +538,40 @@ fn dockFolderIcon(ctx: *d.Ctx, dl: *c.ImDrawList, f: *const types.GuildFolder, i
 
 /// Painel flutuante da pasta: o Dock permanece numa única linha e o conteúdo
 /// abre numa superfície própria, com cabeçalho e grelha espaçada.
+fn folderContextMenu(ctx: *d.Ctx, panel: d.Rect, kind: state.MenuKind, id: u64) void {
+    const menu_w: f32 = 220;
+    const gap: f32 = 10;
+    const right_room = ctx.win.right() - panel.right() - gap;
+    const left_room = panel.x - ctx.win.x - gap;
+    const menu_x = if (right_room >= menu_w)
+        panel.right() + gap
+    else if (left_room >= menu_w)
+        panel.x - menu_w - gap
+    else if (right_room >= left_room)
+        panel.right() + gap
+    else
+        panel.x - menu_w - gap;
+
+    // Keep the context menu beside the folder surface, never underneath it.
+    ctx.popup(.{ .menu = .{ .kind = kind, .id = id, .x = menu_x, .y = ctx.mouse.y } });
+}
+
+fn popupBelongsToFolder(ctx: *const d.Ctx, f: *const types.GuildFolder) bool {
+    return switch (ctx.st.popup) {
+        .menu => |m| switch (m.kind) {
+            .guild_folder => m.id == f.id,
+            .guild => blk: {
+                for (f.guilds) |gid| {
+                    if (gid == m.id) break :blk true;
+                }
+                break :blk false;
+            },
+            else => false,
+        },
+        else => false,
+    };
+}
+
 fn folderPopover(
     ctx: *d.Ctx,
     dl: *c.ImDrawList,
@@ -590,7 +639,7 @@ fn folderPopover(
     d.circle(dl, more.x + 10, more.y + 16, 1.7, dots_color);
     d.circle(dl, more.x + 16, more.y + 16, 1.7, dots_color);
     d.circle(dl, more.x + 22, more.y + 16, 1.7, dots_color);
-    if (more_hb.clicked) ctx.popup(.{ .menu = .{ .kind = .guild_folder, .id = f.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
+    if (more_hb.clicked) folderContextMenu(ctx, panel, .guild_folder, f.id);
     tooltip(ctx, @truncate(f.id *% 19 +% 8800), more.right() + 8, more.y + 16, i18n.tr("Opções da pasta", "Folder options"), more_hb.hovered);
 
     d.line(dl, panel.x + 18, panel.y + header_h - 1, panel.right() - 18, panel.y + header_h - 1, ctx.col(.border).alpha(0.8), 1);
@@ -610,7 +659,12 @@ fn folderPopover(
         beginDockDrag(ctx, .guild, gid, f.id, hb);
         const dropped = releaseDockOn(ctx, hb, .{ .guild = .{ .id = gid, .folder = f.id } }, ix + tile / 2, tile);
         if (hb.clicked and !dropped) ctx.act(.{ .select_guild = gid });
-        if (hb.right) ctx.popup(.{ .menu = .{ .kind = .guild, .id = gid, .x = ctx.mouse.x, .y = ctx.mouse.y } });
+        if (hb.right) {
+            // Right-clicking a member must not collapse its parent folder.
+            ctx.st.open_folders.clearRetainingCapacity();
+            ctx.st.open_folders.put(ctx.st.gpa, f.id, {}) catch {};
+            folderContextMenu(ctx, panel, .guild, gid);
+        }
         if (hb.hovered) d.rect(dl, .{ .x = ir.x - 3, .y = ir.y - 3, .w = ir.w + 6, .h = ir.h + 6 }, folder_color.alpha(0.13), w.shapeRadius(shape, tile) + 4);
         glyph(ctx, dl, g, ix + tile / 2, iy + tile / 2, tile, shape, ctx.st.guild == gid or hb.hovered);
         if (g.mentions > 0) badge(ctx, dl, ir.right() + 2, ir.y - 2, g.mentions);
@@ -717,7 +771,7 @@ fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
                 dockFolderIcon(ctx, dl, f, ir, shape, selected);
                 const label = if (f.name.len > 0) f.name else i18n.tr("Pasta", "Folder");
                 if (hb.hovered) tooltip(ctx, @truncate(f.id *% 13 +% 7000), ir.right() + 12, ir.y + size / 2, label, true);
-                if (ctx.st.open_folders.contains(f.id) and open_folder == null) {
+                if ((ctx.st.open_folders.contains(f.id) or popupBelongsToFolder(ctx, f)) and open_folder == null) {
                     open_folder = f;
                     open_cx = cx;
                 }
