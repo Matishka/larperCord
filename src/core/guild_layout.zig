@@ -360,11 +360,12 @@ test "moving a server out of a folder and reordering folders preserves every gui
         .place = .after,
     } });
     defer free(a, moved);
-    try std.testing.expectEqual(@as(usize, 3), moved.len);
+    try std.testing.expectEqual(@as(usize, 4), moved.len);
     try std.testing.expectEqual(@as(u64, 10), moved[0].id);
     try std.testing.expectEqualSlices(Id, &.{2}, moved[0].guilds);
     try std.testing.expectEqual(@as(Id, 3), moved[1].guilds[0]);
     try std.testing.expectEqual(@as(Id, 1), moved[2].guilds[0]);
+    try std.testing.expectEqual(@as(u64, 20), moved[3].id);
 
     const reordered = try apply(a, &guilds, moved, .{ .move_folder = .{
         .folder = 20,
