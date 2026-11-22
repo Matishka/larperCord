@@ -617,7 +617,7 @@ fn folderPopover(
     const window_x = @max(ctx.win.x, panel.x - shadow_pad);
     const window_y = @max(ctx.win.y, panel.y - shadow_pad);
     const window_right = @min(ctx.win.right(), panel.right() + shadow_pad);
-    const window_bottom = @min(ctx.win.bottom(), panel.bottom() + shadow_pad + 14);
+    const window_bottom = @min(ctx.win.bottom(), bg.y - 2);
     c.ImGui_SetNextWindowPos(d.v(window_x, window_y), 0);
     c.ImGui_SetNextWindowSize(d.v(window_right - window_x, window_bottom - window_y), 0);
     _ = c.ImGui_Begin("##dock-folder-popover", null, c.ImGuiWindowFlags_NoDecoration | c.ImGuiWindowFlags_NoBackground |
