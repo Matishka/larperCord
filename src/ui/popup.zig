@@ -373,6 +373,7 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
     }.f;
     const dev = ctx.st.settings.developer_mode;
     var own = false;
+    var guild_can_leave = false;
     switch (kind) {
         .message => {
             const found = ctx.store.findAny(id) orelse return close(ctx);
@@ -561,8 +562,9 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
             n += conta_menu.guildItems(ctx, id, items[n..]);
             if (@import("moderacao.zig").podeVerBans(ctx, id)) add(&items, &n, .{ .label = "Banimentos", .en = "Bans", .id = @import("moderacao.zig").id_bans });
             if (dev) add(&items, &n, .{ .label = "Copiar ID do servidor", .en = "Copy Server ID", .id = 63 });
-            // Quem é dono não pode sair: precisa passar o servidor antes.
-            if (ctx.store.guild(id)) |vg| if (vg.owner != ctx.store.me) add(&items, &n, .{ .label = "Sair do servidor", .en = "Leave Server", .id = 67, .danger = true, .sep = true });
+            // Keep Leave Server outside the scrolling list, in a fixed footer.
+            // Owners cannot leave without transferring ownership first.
+            if (ctx.store.guild(id)) |vg| guild_can_leave = vg.owner != ctx.store.me;
         },
         .guild_folder => {
             if (folderExists(ctx, id)) {
@@ -590,7 +592,8 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
     const mw: f32 = 220;
     // Menu do usuário: as contas embaixo (o menu cresce para cima).
     const acc_h: f32 = if (kind == .status) accounts_menu.height(ctx) else 0;
-    const mh = quick_h + @as(f32, @floatFromInt(n)) * row_h + seps + colors_h + 12 + acc_h;
+    const leave_footer_h: f32 = if (guild_can_leave) 44 else 0;
+    const mh = quick_h + @as(f32, @floatFromInt(n)) * row_h + seps + colors_h + leave_footer_h + 12 + acc_h;
     // Janela baixa (ou a interface grande): o menu para na altura da janela e os
     // itens rolam por dentro (as reações rápidas ficam paradas em cima).
     const max_h = @max(ctx.win.h - 16, quick_h + 3 * row_h + 12);
@@ -627,7 +630,7 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
     // Os itens, as cores e as contas: numa região que rola quando o menu não cabe.
     var idl = dl;
     if (scrolls) {
-        idl = d.beginRegion(ctx, "##menu-items", .{ .x = r.x, .y = yy, .w = r.w, .h = r.bottom() - 6 - yy }, 0);
+        idl = d.beginRegion(ctx, "##menu-items", .{ .x = r.x, .y = yy, .w = r.w, .h = r.bottom() - leave_footer_h - 6 - yy }, 0);
         track(idl);
         ctx.dl = idl;
         yy = c.ImGui_GetCursorScreenPos().y;
@@ -677,10 +680,24 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
         if (kind == .status and accounts_menu.draw(ctx, idl, r, yy)) chosen_account = true;
     }
     if (scrolls) {
-        d.endRegion(ctx, yy + colors_h + acc_h, r.x);
+        d.endRegion(ctx, yy + (if (colors_first) @as(f32, 0) else colors_h) + acc_h, r.x);
         ctx.dl = dl;
     }
     if (picked) |item| return choose(ctx, kind, id, item, r);
+    if (guild_can_leave) {
+        // Always visible, even when a server has a long context menu.
+        // Confirmation remains a separate screen (action 67 -> guild_leave).
+        const footer_top = r.bottom() - leave_footer_h;
+        d.line(dl, r.x + 10, footer_top + 2, r.right() - 10, footer_top + 2, ctx.col(.border), 1);
+        const leave_r: d.Rect = .{ .x = r.x + 6, .y = footer_top + 8, .w = r.w - 12, .h = row_h - 2 };
+        const leave_hb = d.hit(ctx, 7700, leave_r);
+        qa.mark(leave_r, "menu:Leave Server", .{});
+        if (leave_hb.hovered) d.rect(dl, leave_r, ctx.col(.danger), @max(ctx.th.radius - 2, 2));
+        _ = d.textClipped(dl, fam.get(.medium), 14, leave_r.x + 10, d.centerY(leave_r, 14),
+            if (leave_hb.hovered) d.Rgba.white else ctx.col(.danger),
+            i18n.tr("Sair do servidor", "Leave Server"), leave_r.w - 18);
+        if (leave_hb.clicked) return choose(ctx, kind, id, 67, r);
+    }
     if (chosen_account) return close(ctx);
     // O submenu do prazo, fora da região que rola (ele é uma janela à parte).
     if (kind == .status and status_menu.drawSub(ctx, r)) close(ctx);
