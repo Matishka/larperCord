@@ -521,6 +521,99 @@ fn dockFolderIcon(ctx: *d.Ctx, dl: *c.ImDrawList, f: *const types.GuildFolder, i
     if (selected) d.circle(dl, ir.x + ir.w / 2, ir.bottom() + 4, 2.5, ctx.col(.accent));
 }
 
+/// Painel flutuante da pasta: o Dock permanece numa única linha e o conteúdo
+/// abre numa superfície própria, com cabeçalho e grelha espaçada.
+fn folderPopover(
+    ctx: *d.Ctx,
+    dl: *c.ImDrawList,
+    f: *const types.GuildFolder,
+    anchor_x: f32,
+    r: d.Rect,
+    bg: d.Rect,
+    base: f32,
+    shape: w.Shape,
+) void {
+    if (f.guilds.len == 0) return;
+
+    const tile = @min(52.0, @max(44.0, base * 1.2));
+    const gap: f32 = 10;
+    const padding: f32 = 20;
+    const columns: usize = if (f.guilds.len <= 3) f.guilds.len else if (f.guilds.len <= 6) 3 else 6;
+    const rows = (f.guilds.len + columns - 1) / columns;
+    const grid_w = @as(f32, @floatFromInt(columns)) * tile + @as(f32, @floatFromInt(columns - 1)) * gap;
+    const grid_h = @as(f32, @floatFromInt(rows)) * tile + @as(f32, @floatFromInt(rows - 1)) * gap;
+    const desired_w = @max(248.0, grid_w + padding * 2);
+    const panel_w = @min(desired_w, @max(1.0, @min(560.0, r.w - 24)));
+    const header_h: f32 = 64;
+    const panel_h = header_h + grid_h + padding;
+    const min_x = r.x + 12;
+    const max_x = @max(min_x, r.right() - panel_w - 12);
+    const panel_x = std.math.clamp(anchor_x - panel_w / 2, min_x, max_x);
+    const panel_y = @max(r.y + 6, bg.y - panel_h - 12);
+    const panel: d.Rect = .{ .x = panel_x, .y = panel_y, .w = panel_w, .h = panel_h };
+    const folder_color = if (f.color != 0) d.Rgba.hex(f.color) else ctx.col(.accent);
+    const radius: f32 = 20;
+
+    d.shadow(dl, panel, radius, 18, ctx.col(.shadow));
+    d.rect(dl, panel, ctx.col(.overlay).mix(folder_color, 0.18).alpha(0.97), radius);
+    d.rect(dl, .{ .x = panel.x + 1, .y = panel.y + 1, .w = panel.w - 2, .h = 58 }, folder_color.alpha(0.10), radius - 1);
+    d.border(dl, panel, ctx.col(.border).mix(folder_color, 0.55).alpha(0.96), radius, 1.2);
+
+    // Pequeno apontador visual liga a bandeja à pasta selecionada no Dock.
+    const pointer_x = std.math.clamp(anchor_x, panel.x + 28, panel.right() - 28);
+    const pointer_tip = bg.y - 4;
+    const pointer_color = ctx.col(.border).mix(folder_color, 0.62);
+    d.line(dl, pointer_x - 8, panel.bottom() - 1, pointer_x, pointer_tip, pointer_color, 2);
+    d.line(dl, pointer_x, pointer_tip, pointer_x + 8, panel.bottom() - 1, pointer_color, 2);
+
+    folderGlyph(dl, panel.x + 34, panel.y + 31, 12, folder_color.mix(d.Rgba.white, 0.22));
+    const title = if (f.name.len > 0) f.name else i18n.tr("Pasta", "Folder");
+    _ = d.textClipped(dl, ctx.ui.get(.bold), 18, panel.x + 58, panel.y + 12, ctx.col(.text), title, panel.w - 116);
+
+    var count_buf: [48]u8 = undefined;
+    const count_label = std.fmt.bufPrint(&count_buf, "{d} {s}", .{
+        f.guilds.len,
+        i18n.tr("servidores", "servers"),
+    }) catch "";
+    d.text(dl, ctx.ui.get(.regular), 12, panel.x + 58, panel.y + 36, ctx.col(.muted), count_label);
+
+    const more: d.Rect = .{ .x = panel.right() - 48, .y = panel.y + 14, .w = 32, .h = 32 };
+    const more_hb = d.hit(ctx, 8900 + @as(usize, @truncate(f.id % 100000)), more);
+    qa.mark(more, "guild-folder-more:{d}", .{f.id});
+    d.rect(dl, more, if (more_hb.hovered) ctx.col(.hover) else ctx.col(.text).alpha(0.055), 16);
+    const dots_color = if (more_hb.hovered) ctx.col(.text) else ctx.col(.muted);
+    d.circle(dl, more.x + 10, more.y + 16, 1.7, dots_color);
+    d.circle(dl, more.x + 16, more.y + 16, 1.7, dots_color);
+    d.circle(dl, more.x + 22, more.y + 16, 1.7, dots_color);
+    if (more_hb.clicked) ctx.popup(.{ .menu = .{ .kind = .guild_folder, .id = f.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
+    tooltip(ctx, @truncate(f.id *% 19 +% 8800), more.right() + 8, more.y + 16, i18n.tr("Opções da pasta", "Folder options"), more_hb.hovered);
+
+    d.line(dl, panel.x + 18, panel.y + header_h - 1, panel.right() - 18, panel.y + header_h - 1, ctx.col(.border).alpha(0.8), 1);
+
+    const grid_x = panel.x + (panel.w - grid_w) / 2;
+    const grid_y = panel.y + header_h + 12;
+    const step = tile + gap;
+    for (f.guilds, 0..) |gid, j| {
+        const g = ctx.store.guild(gid) orelse continue;
+        const col = j % columns;
+        const row = j / columns;
+        const ix = grid_x + @as(f32, @floatFromInt(col)) * step;
+        const iy = grid_y + @as(f32, @floatFromInt(row)) * step;
+        const ir: d.Rect = .{ .x = ix, .y = iy, .w = tile, .h = tile };
+        const hb = d.hit(ctx, 6000 + j, ir);
+        qa.mark(ir, "guild-folder-member:{d}", .{gid});
+        beginDockDrag(ctx, .guild, gid, f.id, hb);
+        const dropped = releaseDockOn(ctx, hb, .{ .guild = .{ .id = gid, .folder = f.id } }, ix + tile / 2, tile);
+        if (hb.clicked and !dropped) ctx.act(.{ .select_guild = gid });
+        if (hb.right) ctx.popup(.{ .menu = .{ .kind = .guild, .id = gid, .x = ctx.mouse.x, .y = ctx.mouse.y } });
+        if (hb.hovered) d.rect(dl, .{ .x = ir.x - 3, .y = ir.y - 3, .w = ir.w + 6, .h = ir.h + 6 }, folder_color.alpha(0.13), w.shapeRadius(shape, tile) + 4);
+        glyph(ctx, dl, g, ix + tile / 2, iy + tile / 2, tile, shape, ctx.st.guild == gid or hb.hovered);
+        if (g.mentions > 0) badge(ctx, dl, ir.right() + 2, ir.y - 2, g.mentions);
+        if (ctx.st.guild == gid) d.circle(dl, ix + tile / 2, ir.bottom() + 3, 2.2, folder_color);
+        if (hb.hovered) tooltip(ctx, 6100 + j, ir.right() + 8, iy + tile / 2, g.name, true);
+    }
+}
+
 /// Dock no estilo do macOS: os ícones crescem perto do mouse; pastas e servidores
 /// são itens de primeira classe e podem ser arrastados para reordenar ou agrupar.
 fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
@@ -628,41 +721,9 @@ fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
         x += base + gap;
     }
 
-    // A pasta aberta aparece numa bandeja acima do Dock. Os membros continuam
-    // selecionáveis e também podem ser arrastados para fora ou para outra pasta.
-    if (open_folder) |f| if (f.guilds.len > 0) {
-        const mini = base * 0.72;
-        const step = mini + 8;
-        const cols = @min(f.guilds.len, 10);
-        const rows = (f.guilds.len + cols - 1) / cols;
-        const panel_w = @as(f32, @floatFromInt(cols)) * step + 16;
-        const panel_h = @as(f32, @floatFromInt(rows)) * step + 16;
-        const max_x = @max(bg.x + 4, bg.right() - panel_w - 4);
-        const panel_x = std.math.clamp(open_cx - panel_w / 2, bg.x + 4, max_x);
-        const panel_y = @max(r.y + 4, bg.y - panel_h - 10);
-        const panel: d.Rect = .{ .x = panel_x, .y = panel_y, .w = panel_w, .h = panel_h };
-        d.shadow(dl, panel, 12, 10, ctx.col(.shadow));
-        d.rect(dl, panel, ctx.col(.overlay), 14);
-        d.border(dl, panel, ctx.col(.border), 14, 1);
-        for (f.guilds, 0..) |gid, j| {
-            const g = ctx.store.guild(gid) orelse continue;
-            const col = j % cols;
-            const row = j / cols;
-            const ix = panel.x + 8 + @as(f32, @floatFromInt(col)) * step;
-            const iy = panel.y + 8 + @as(f32, @floatFromInt(row)) * step;
-            const ir: d.Rect = .{ .x = ix, .y = iy, .w = mini, .h = mini };
-            const hb = d.hit(ctx, 6000 + j, ir);
-            qa.mark(ir, "guild-folder-member:{d}", .{gid});
-            beginDockDrag(ctx, .guild, gid, f.id, hb);
-            const dropped = releaseDockOn(ctx, hb, .{ .guild = .{ .id = gid, .folder = f.id } }, ix + mini / 2, mini);
-            if (hb.clicked and !dropped) ctx.act(.{ .select_guild = gid });
-            if (hb.right) ctx.popup(.{ .menu = .{ .kind = .guild, .id = gid, .x = ctx.mouse.x, .y = ctx.mouse.y } });
-            glyph(ctx, dl, g, ix + mini / 2, iy + mini / 2, mini, shape, ctx.st.guild == gid);
-            if (g.mentions > 0) badge(ctx, dl, ir.right() + 1, ir.y - 1, g.mentions);
-            if (ctx.st.guild == gid) d.circle(dl, ix + mini / 2, ir.bottom() + 2, 2, ctx.col(.accent));
-            if (hb.hovered) tooltip(ctx, 6100 + j, ir.right() + 8, iy + mini / 2, g.name, true);
-        }
-    };
+    // Conteúdo da pasta fica numa janela flutuante; a linha principal do Dock
+    // não cresce nem se mistura com os servidores que estão dentro da pasta.
+    if (open_folder) |f| folderPopover(ctx, dl, f, open_cx, r, bg, base, shape);
     if (c.ImGui_IsMouseReleased(0)) ctx.st.dock_drag = null;
 }
 
