@@ -142,6 +142,7 @@ fn popupKey(p: state.Popup) u64 {
         .onboarding => |t| 24 +% t.guild *% 31,
         .devices => |dv| 25 +% @as(u64, @intFromEnum(dv.which)),
         .tab_set_name => |t| 26 +% (if (t.rename) |i| @as(u64, i) + 1 else 0) *% 31,
+        .guild_folder_name => |t| 28 +% t.id *% 31,
         .lembrete => |t| 27 +% t.message *% 31 +% @as(u64, t.edit) *% 17,
         .exportar => |t| 27 +% t.channel *% 31,
     };
@@ -227,6 +228,7 @@ pub fn draw(ctx: *d.Ctx) void {
         .onboarding => |t| @import("entrada.zig").drawOnboarding(ctx, t.guild),
         .devices => |dv| @import("device_menu.zig").draw(ctx, dv.which, dv.x, dv.y),
         .tab_set_name => |t| @import("conjuntos.zig").drawName(ctx, t.rename),
+        .guild_folder_name => |t| @import("guild_folder_name.zig").draw(ctx, t.id),
         .exportar => |t| exportar_ui.drawDialog(ctx, t.channel),
         .none => {},
     }
@@ -371,6 +373,7 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
     }.f;
     const dev = ctx.st.settings.developer_mode;
     var own = false;
+    var guild_can_leave = false;
     switch (kind) {
         .message => {
             const found = ctx.store.findAny(id) orelse return close(ctx);
@@ -559,8 +562,15 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
             n += conta_menu.guildItems(ctx, id, items[n..]);
             if (@import("moderacao.zig").podeVerBans(ctx, id)) add(&items, &n, .{ .label = "Banimentos", .en = "Bans", .id = @import("moderacao.zig").id_bans });
             if (dev) add(&items, &n, .{ .label = "Copiar ID do servidor", .en = "Copy Server ID", .id = 63 });
-            // Quem é dono não pode sair: precisa passar o servidor antes.
-            if (ctx.store.guild(id)) |vg| if (vg.owner != ctx.store.me) add(&items, &n, .{ .label = "Sair do servidor", .en = "Leave Server", .id = 67, .danger = true, .sep = true });
+            // Keep Leave Server outside the scrolling list, in a fixed footer.
+            // Owners cannot leave without transferring ownership first.
+            if (ctx.store.guild(id)) |vg| guild_can_leave = vg.owner != ctx.store.me;
+        },
+        .guild_folder => {
+            if (folderExists(ctx, id)) {
+                add(&items, &n, .{ .label = "Renomear pasta…", .en = "Rename Folder…", .id = 70 });
+                add(&items, &n, .{ .label = "Remover pasta", .en = "Remove Folder", .id = 71, .danger = true, .sep = true });
+            }
         },
     }
 
@@ -569,7 +579,10 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
     const row_h: f32 = 32;
     const quick_h: f32 = if (kind == .message) 46 else 0;
     // "Cor do servidor": uma fileira de cores no fim do menu do servidor.
-    const colors_h: f32 = if (kind == .guild and ctx.store.guild(id) != null) 62 else 0;
+    const colors_h: f32 = if ((kind == .guild and ctx.store.guild(id) != null) or (kind == .guild_folder and folderExists(ctx, id))) 62 else 0;
+    // Large server menus can reach the bottom of the screen. Put the color
+    // palette first so it is always visible instead of hiding below the Dock.
+    const colors_first = kind == .guild and colors_h > 0;
     var seps: f32 = 0;
     for (items[0..n]) |it| {
         if (it.sep) seps += 9;
@@ -579,12 +592,21 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
     const mw: f32 = 220;
     // Menu do usuário: as contas embaixo (o menu cresce para cima).
     const acc_h: f32 = if (kind == .status) accounts_menu.height(ctx) else 0;
-    const mh = quick_h + @as(f32, @floatFromInt(n)) * row_h + seps + colors_h + 12 + acc_h;
-    // Janela baixa (ou a interface grande): o menu para na altura da janela e os
-    // itens rolam por dentro (as reações rápidas ficam paradas em cima).
-    const max_h = @max(ctx.win.h - 16, quick_h + 3 * row_h + 12);
+    const leave_footer_h: f32 = if (guild_can_leave) 44 else 0;
+    const mh = quick_h + @as(f32, @floatFromInt(n)) * row_h + seps + colors_h + leave_footer_h + 12 + acc_h;
+    // The Cupertino Dock floats above the bottom of the app. Guild context
+    // menus must stop ABOVE it; otherwise the fixed "Leave Server" footer is
+    // technically in the menu but visually covered by Dock icons.
+    const dock_inset: f32 = if (kind == .guild and std.mem.eql(u8, ctx.theme_name, "cupertino")) 84 else 0;
+    const max_h = @max(96.0, ctx.win.h - 16 - dock_inset);
     const scrolls = mh > max_h;
-    const r = fit(ctx, x + 2, y + 2 - acc_h, mw, @min(mh, max_h));
+    const fitted = fit(ctx, x + 2, y + 2 - acc_h, mw, @min(mh, max_h));
+    const r: d.Rect = if (dock_inset > 0) .{
+        .x = fitted.x,
+        .y = @max(ctx.win.y + 8, @min(fitted.y, ctx.win.bottom() - dock_inset - 8 - fitted.h)),
+        .w = fitted.w,
+        .h = fitted.h,
+    } else fitted;
     const k = anim.to(anim.id("menu", @intFromEnum(kind)), 1, 30);
     const dl = beginWindow("##menu", r);
     defer c.ImGui_End();
@@ -616,10 +638,14 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
     // Os itens, as cores e as contas: numa região que rola quando o menu não cabe.
     var idl = dl;
     if (scrolls) {
-        idl = d.beginRegion(ctx, "##menu-items", .{ .x = r.x, .y = yy, .w = r.w, .h = r.bottom() - 6 - yy }, 0);
+        idl = d.beginRegion(ctx, "##menu-items", .{ .x = r.x, .y = yy, .w = r.w, .h = r.bottom() - leave_footer_h - 6 - yy }, 0);
         track(idl);
         ctx.dl = idl;
         yy = c.ImGui_GetCursorScreenPos().y;
+    }
+    if (colors_first) {
+        guildColors(ctx, idl, id, r, yy);
+        yy += colors_h;
     }
     var picked: ?u8 = null;
     for (items[0..n], 0..) |it, i| {
@@ -658,14 +684,28 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
     }
     var chosen_account = false;
     if (picked == null) {
-        if (colors_h > 0) guildColors(ctx, idl, id, r, yy);
+        if (kind == .guild_folder and colors_h > 0) guildFolderColors(ctx, idl, id, r, yy);
         if (kind == .status and accounts_menu.draw(ctx, idl, r, yy)) chosen_account = true;
     }
     if (scrolls) {
-        d.endRegion(ctx, yy + colors_h + acc_h, r.x);
+        d.endRegion(ctx, yy + (if (colors_first) @as(f32, 0) else colors_h) + acc_h, r.x);
         ctx.dl = dl;
     }
     if (picked) |item| return choose(ctx, kind, id, item, r);
+    if (guild_can_leave) {
+        // Always visible, even when a server has a long context menu.
+        // Confirmation remains a separate screen (action 67 -> guild_leave).
+        const footer_top = r.bottom() - leave_footer_h;
+        d.line(dl, r.x + 10, footer_top + 2, r.right() - 10, footer_top + 2, ctx.col(.border), 1);
+        const leave_r: d.Rect = .{ .x = r.x + 6, .y = footer_top + 8, .w = r.w - 12, .h = row_h - 2 };
+        const leave_hb = d.hit(ctx, 7700, leave_r);
+        qa.mark(leave_r, "menu:Leave Server", .{});
+        if (leave_hb.hovered) d.rect(dl, leave_r, ctx.col(.danger), @max(ctx.th.radius - 2, 2));
+        _ = d.textClipped(dl, fam.get(.medium), 14, leave_r.x + 10, d.centerY(leave_r, 14),
+            if (leave_hb.hovered) d.Rgba.white else ctx.col(.danger),
+            i18n.tr("Sair do servidor", "Leave Server"), leave_r.w - 18);
+        if (leave_hb.clicked) return choose(ctx, kind, id, 67, r);
+    }
     if (chosen_account) return close(ctx);
     // O submenu do prazo, fora da região que rola (ele é uma janela à parte).
     if (kind == .status and status_menu.drawSub(ctx, r)) close(ctx);
@@ -696,6 +736,44 @@ fn guildColors(ctx: *d.Ctx, dl: *c.ImDrawList, guild: Id, r: d.Rect, y: f32) voi
         } else d.circle(dl, cx, cy, 7.5, d.Rgba.hex(palette[i - 1]));
         if (hb.clicked) {
             ctx.act(.{ .set_guild_color = .{ .guild = guild, .rgb = if (i == 0) null else palette[i - 1] } });
+            return close(ctx);
+        }
+    }
+}
+
+fn folderExists(ctx: *const d.Ctx, id: Id) bool {
+    for (ctx.store.folders) |f| if (f.id == id and id != 0) return true;
+    return false;
+}
+
+/// Fileira de cores da pasta; a primeira opção restaura a cor padrão.
+fn guildFolderColors(ctx: *d.Ctx, dl: *c.ImDrawList, folder: Id, r: d.Rect, y: f32) void {
+    const palette = &@import("../app.zig").App.accents;
+    const fam = ctx.ui;
+    d.line(dl, r.x + 10, y + 4, r.right() - 10, y + 4, ctx.col(.border), 1);
+    d.text(dl, fam.get(.semibold), 12, r.x + 16, y + 12, ctx.col(.muted), i18n.tr("Cor da pasta", "Folder Color"));
+    var current: u32 = 0;
+    for (ctx.store.folders) |f| if (f.id == folder) {
+        current = f.color;
+        break;
+    };
+    const step = (r.w - 24) / @as(f32, @floatFromInt(palette.len + 1));
+    for (0..palette.len + 1) |i| {
+        const cx = r.x + 12 + step * (@as(f32, @floatFromInt(i)) + 0.5);
+        const cy = y + 44;
+        const sr: d.Rect = .{ .x = cx - step / 2, .y = cy - 11, .w = step, .h = 22 };
+        const hb = d.hit(ctx, 340 + i, sr);
+        qa.mark(sr, "folder-color:{d}", .{i});
+        const color = if (i == 0) 0 else palette[i - 1];
+        const selected = current == color;
+        if (selected or hb.hovered) c.ImDrawList_AddCircleEx(dl, d.v(cx, cy), 10.5, (if (selected) ctx.col(.text) else ctx.col(.muted)).u(), 0, 1.5, 0);
+        if (i == 0) {
+            c.ImDrawList_AddCircleEx(dl, d.v(cx, cy), 7, ctx.col(.faint).u(), 0, 1.5, 0);
+            d.line(dl, cx - 4.5, cy + 4.5, cx + 4.5, cy - 4.5, ctx.col(.faint), 1.5);
+            d.tip(ctx, sr, i18n.tr("Cor padrão", "Default color"), hb.hovered);
+        } else d.circle(dl, cx, cy, 7.5, d.Rgba.hex(color));
+        if (hb.clicked) {
+            ctx.act(.{ .guild_layout = .{ .color = .{ .folder = folder, .color = color } } });
             return close(ctx);
         }
     }
@@ -753,6 +831,14 @@ fn choose(ctx: *d.Ctx, kind: state.MenuKind, id: Id, item: u8, r: d.Rect) void {
     close(ctx);
     if (kind == .pet) return @import("mascote_pet.zig").menuChoose(ctx, item);
     if (kind == .tabs) return @import("conjuntos.zig").menuChoose(ctx, item, id);
+    if (kind == .guild_folder) {
+        switch (item) {
+            70 => @import("guild_folder_name.zig").open(ctx, id),
+            71 => ctx.act(.{ .guild_layout = .{ .delete = id } }),
+            else => {},
+        }
+        return;
+    }
     if (kind == .plugin_choices) {
         const host = @import("../plugins/host.zig");
         const hit = host.menuEntry(host.appOf(), choice_kind, choice_index) orelse return;

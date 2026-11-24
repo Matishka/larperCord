@@ -14,6 +14,9 @@ const qa = @import("qa.zig");
 const anim = @import("anim.zig");
 const w = @import("widgets.zig");
 const types = @import("../core/types.zig");
+const guild_layout = @import("../core/guild_layout.zig");
+const state = @import("state.zig");
+const DockDragKind = state.DockDragKind;
 const i18n = @import("i18n.zig");
 const icons = @import("icons.zig");
 
@@ -92,8 +95,12 @@ fn folder(ctx: *d.Ctx, dl: *c.ImDrawList, f: *const types.GuildFolder, cx: f32, 
         // Até 4 ícones pequenos, 2×2.
         const ms = size * 0.36;
         const off = ms / 2 + 2;
-        for (f.guilds[0..@min(f.guilds.len, 4)], 0..) |gid, i| {
+        var mini_i: usize = 0;
+        for (f.guilds) |gid| {
+            if (mini_i >= 4) break;
             const g = ctx.store.guild(gid) orelse continue;
+            const i = mini_i;
+            mini_i += 1;
             const mx = cx + (if (i % 2 == 0) -off else off);
             const my = y + size / 2 + (if (i / 2 == 0) -off else off);
             glyph(ctx, dl, g, mx, my, ms, shape, false);
@@ -338,18 +345,32 @@ fn badge(ctx: *d.Ctx, dl: *c.ImDrawList, right: f32, top: f32, count: u16) void 
 }
 
 pub fn tooltip(ctx: *d.Ctx, n: usize, x: f32, cy: f32, label: []const u8, show: bool) void {
+    // Tooltips are distracting while a context menu or dialog is active.
+    if (ctx.st.popup != .none) return;
     const k = anim.to(anim.id("tip", n), if (show) 1 else 0, 26);
     if (k < 0.02) return;
+
     const fg = ctx.fg;
-    const fs: f32 = 15;
+    const fs: f32 = 14;
     const font = ctx.ui.get(.semibold);
-    const tw = d.width(font, fs, label);
-    const ox = x - (1 - k) * 8;
-    const r: d.Rect = .{ .x = ox, .y = cy - 17, .w = tw + 24, .h = 34 };
-    d.shadow(fg, r, 6, 8, ctx.col(.shadow).alpha(k));
-    d.rect(fg, r, ctx.col(.overlay).alpha(k), 6);
-    c.ImDrawList_AddTriangleFilled(fg, d.v(ox - 5, cy), d.v(ox + 1, cy - 6), d.v(ox + 1, cy + 6), ctx.col(.overlay).col(k));
-    d.text(fg, font, fs, ox + 12, cy - 9.5, ctx.col(.text).alpha(k), label);
+    const max_w = @max(64.0, ctx.win.w - 32);
+    const text_w = @min(d.width(font, fs, label), max_w - 24);
+    const width = text_w + 24;
+    const left = ctx.win.x + 8;
+    const right = ctx.win.right() - width - 8;
+
+    // Prefer the right side of the icon, but flip to the left near the window edge.
+    var target_x = x + 4;
+    if (target_x > right) target_x = x - width - 8;
+    target_x = std.math.clamp(target_x, left, @max(left, right));
+    const ox = target_x - (1 - k) * 5;
+    const oy = std.math.clamp(cy - 17, ctx.win.y + 8, ctx.win.bottom() - 42);
+    const tr: d.Rect = .{ .x = ox, .y = oy, .w = width, .h = 34 };
+
+    d.shadow(fg, tr, 7, 9, ctx.col(.shadow).alpha(k));
+    d.rect(fg, tr, ctx.col(.sidebar).alpha(0.98 * k), 7);
+    d.border(fg, tr, ctx.col(.border).mix(ctx.col(.text), 0.18).alpha(k), 7, 1);
+    _ = d.textClipped(fg, font, fs, ox + 12, oy + 8.5, ctx.col(.text).alpha(k), label, text_w);
 }
 
 /// Estilo terminal: `[1:LC] 2:RH 3:Z ...`
@@ -409,15 +430,352 @@ fn textTabs(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect) void {
     c.ImGui_Dummy(d.v(1, @max(1, r.h - 6)));
 }
 
-/// Dock no estilo do macOS: os ícones crescem perto do mouse.
+// Folder IDs are opaque Discord identifiers, not secrets. SDL's monotonic
+// nanosecond clock gives us a collision-resistant starting point without relying
+// on the pre-0.16 std.crypto.random API.
+var last_dock_folder_id: u64 = 0;
+
+fn nextDockFolderId(ctx: *const d.Ctx) u64 {
+    var id = c.SDL_GetTicksNS() & 0x7fff_ffff_ffff_ffff;
+    if (id == 0) id = 1;
+    if (id <= last_dock_folder_id) id = last_dock_folder_id +% 1;
+    while (true) {
+        var used = false;
+        for (ctx.store.folders) |f| if (f.id == id) {
+            used = true;
+            break;
+        };
+        if (!used) {
+            last_dock_folder_id = id;
+            return id;
+        }
+        id +%= 1;
+    }
+}
+
+fn beginDockDrag(ctx: *d.Ctx, kind: DockDragKind, id: u64, folder_id: u64, hb: d.Hit) void {
+    if (!hb.held or ctx.st.settings.open or ctx.st.popup != .none) return;
+    if (ctx.st.dock_drag == null) {
+        ctx.st.dock_drag = .{ .kind = kind, .id = id, .folder = folder_id, .start_x = ctx.mouse.x, .start_y = ctx.mouse.y };
+    }
+    if (ctx.st.dock_drag) |*drag| {
+        if (drag.kind == kind and drag.id == id and drag.folder == folder_id) {
+            const dx = ctx.mouse.x - drag.start_x;
+            const dy = ctx.mouse.y - drag.start_y;
+            if (dx * dx + dy * dy > 36) drag.moved = true;
+        }
+    }
+}
+
+fn dockGuildPlace(mouse_x: f32, cx: f32, size: f32) guild_layout.Place {
+    // Only the central 30% creates a folder. Edges sort before/after.
+    return if (@abs(mouse_x - cx) <= size * 0.15)
+        .inside
+    else if (mouse_x < cx)
+        .before
+    else
+        .after;
+}
+
+fn dockDropHint(ctx: *d.Ctx, dl: *c.ImDrawList, rect: d.Rect, place: guild_layout.Place) void {
+    const accent = ctx.col(.accent);
+    switch (place) {
+        .inside => d.border(dl, .{
+            .x = rect.x - 3, .y = rect.y - 3,
+            .w = rect.w + 6, .h = rect.h + 6,
+        }, accent, 11, 2.5),
+        .before, .after => {
+            const edge_x = if (place == .before) rect.x - 5 else rect.right() + 2;
+            d.rect(dl, .{
+                .x = edge_x, .y = rect.y - 4, .w = 3, .h = rect.h + 8,
+            }, accent, 1.5);
+        },
+    }
+}
+
+fn dropDockItem(ctx: *d.Ctx, target: guild_layout.Target, cx: f32, size: f32) void {
+    const drag = ctx.st.dock_drag orelse return;
+    if (!drag.moved) return;
+    switch (drag.kind) {
+        .guild => {
+            const place: guild_layout.Place = switch (target) {
+                .folder => .inside,
+                .guild => dockGuildPlace(ctx.mouse.x, cx, size),
+            };
+            var new_id: u64 = 0;
+            if (place == .inside) switch (target) {
+                .guild => |g| if (g.folder == 0 and g.id != drag.id) {
+                    new_id = nextDockFolderId(ctx);
+                },
+                .folder => {},
+            };
+            ctx.act(.{ .guild_layout = .{ .move_guild = .{
+                .guild = drag.id,
+                .target = target,
+                .place = place,
+                .new_id = new_id,
+            } } });
+        },
+        .folder => {
+            const place: guild_layout.Place = if (ctx.mouse.x < cx) .before else .after;
+            ctx.act(.{ .guild_layout = .{ .move_folder = .{
+                .folder = drag.id,
+                .target = target,
+                .place = place,
+            } } });
+        },
+    }
+}
+
+/// Retorna true quando o mouse soltou um item arrastado sobre este destino.
+fn releaseDockOn(ctx: *d.Ctx, target: guild_layout.Target, target_rect: d.Rect, cx: f32, size: f32) bool {
+    // ImGui suppresses hover on every item except the active drag source.
+    // Use the actual target rectangle on mouse-up so dropping onto another
+    // server (or a folder member) works while the source keeps the active ID.
+    if (!c.ImGui_IsMouseReleased(0) or ctx.st.popup != .none or !target_rect.contains(ctx.mouse.x, ctx.mouse.y)) return false;
+    if (ctx.st.dock_drag) |drag| {
+        if (drag.moved) dropDockItem(ctx, target, cx, size);
+        ctx.st.dock_drag = null;
+        return drag.moved;
+    }
+    return false;
+}
+
+fn dockFolderIcon(ctx: *d.Ctx, dl: *c.ImDrawList, f: *const types.GuildFolder, ir: d.Rect, shape: w.Shape, selected: bool) void {
+    const open = ctx.st.open_folders.contains(f.id);
+    const color = if (f.color != 0) d.Rgba.hex(f.color) else ctx.col(.accent);
+    const radius = w.shapeRadius(shape, ir.w);
+    var mentions: u32 = 0;
+    for (f.guilds) |gid| {
+        if (ctx.store.guild(gid)) |g| {
+            mentions += g.mentions;
+        }
+    }
+
+    d.rect(dl, ir, color.alpha(if (open) 0.34 else 0.2), radius);
+    if (open) {
+        folderGlyph(dl, ir.x + ir.w / 2, ir.y + ir.h / 2, ir.w * 0.27, color.mix(d.Rgba.white, 0.18));
+    } else {
+        const ms = ir.w * 0.34;
+        const off = ms * 0.48;
+        var mini_i: usize = 0;
+        for (f.guilds) |gid| {
+            if (mini_i >= 4) break;
+            const g = ctx.store.guild(gid) orelse continue;
+            const i = mini_i;
+            mini_i += 1;
+            const mx = ir.x + ir.w / 2 + (if (i % 2 == 0) -off else off);
+            const my = ir.y + ir.h / 2 + (if (i / 2 == 0) -off else off);
+            glyph(ctx, dl, g, mx, my, ms, shape, false);
+        }
+    }
+    if (mentions > 0) badge(ctx, dl, ir.right() + 2, ir.y - 2, @intCast(@min(mentions, 999)));
+    if (selected) d.circle(dl, ir.x + ir.w / 2, ir.bottom() + 4, 2.5, ctx.col(.accent));
+}
+
+/// Painel flutuante da pasta: o Dock permanece numa única linha e o conteúdo
+/// abre numa superfície própria, com cabeçalho e grelha espaçada.
+fn folderContextMenu(ctx: *d.Ctx, panel: d.Rect, kind: state.MenuKind, id: u64) void {
+    const menu_w: f32 = 220;
+    const gap: f32 = 10;
+    const right_room = ctx.win.right() - panel.right() - gap;
+    const left_room = panel.x - ctx.win.x - gap;
+    const menu_x = if (right_room >= menu_w)
+        panel.right() + gap
+    else if (left_room >= menu_w)
+        panel.x - menu_w - gap
+    else if (right_room >= left_room)
+        panel.right() + gap
+    else
+        panel.x - menu_w - gap;
+
+    // Keep the context menu beside the folder surface, never underneath it.
+    ctx.popup(.{ .menu = .{ .kind = kind, .id = id, .x = menu_x, .y = ctx.mouse.y } });
+}
+
+fn popupBelongsToFolder(ctx: *const d.Ctx, f: *const types.GuildFolder) bool {
+    return switch (ctx.st.popup) {
+        .menu => |m| switch (m.kind) {
+            .guild_folder => m.id == f.id,
+            .guild => blk: {
+                for (f.guilds) |gid| {
+                    if (gid == m.id) break :blk true;
+                }
+                break :blk false;
+            },
+            else => false,
+        },
+        else => false,
+    };
+}
+
+fn folderPopover(
+    ctx: *d.Ctx,
+    f: *const types.GuildFolder,
+    anchor_x: f32,
+    r: d.Rect,
+    bg: d.Rect,
+    base: f32,
+    shape: w.Shape,
+) void {
+    // Discord may still reference a guild after we leave it. Only lay out
+    // guilds that are present locally; do not mutate/sync the saved folder here.
+    var visible_count: usize = 0;
+    for (f.guilds) |gid| {
+        if (ctx.store.guild(gid) != null) visible_count += 1;
+    }
+    if (visible_count == 0) return;
+
+    const tile = @min(52.0, @max(44.0, base * 1.2));
+    const gap: f32 = 10;
+    const padding: f32 = 20;
+    const columns: usize = if (visible_count <= 3) visible_count else if (visible_count <= 6) 3 else 6;
+    const rows = (visible_count + columns - 1) / columns;
+    const grid_w = @as(f32, @floatFromInt(columns)) * tile + @as(f32, @floatFromInt(columns - 1)) * gap;
+    const grid_h = @as(f32, @floatFromInt(rows)) * tile + @as(f32, @floatFromInt(rows - 1)) * gap;
+    const desired_w = @max(248.0, grid_w + padding * 2);
+    const panel_w = @min(desired_w, @max(1.0, @min(560.0, r.w - 24)));
+    const header_h: f32 = 64;
+    const panel_h = header_h + grid_h + padding + 38;
+    const min_x = r.x + 12;
+    const max_x = @max(min_x, r.right() - panel_w - 12);
+    const panel_x = std.math.clamp(anchor_x - panel_w / 2, min_x, max_x);
+    // Position the popover against the full app viewport, not the narrow Dock
+    // layout region. The latter starts near the bottom of the window and was
+    // forcing the panel below the Dock, where most of it became invisible.
+    const min_y = ctx.win.y + 12;
+    const max_y = @max(min_y, ctx.win.bottom() - panel_h - 12);
+    const panel_y = std.math.clamp(bg.y - panel_h - 12, min_y, max_y);
+    const panel: d.Rect = .{ .x = panel_x, .y = panel_y, .w = panel_w, .h = panel_h };
+    const folder_color = if (f.color != 0) d.Rgba.hex(f.color) else ctx.col(.accent);
+    const radius: f32 = 20;
+
+    // The tray is drawn above the Dock, outside the Dock's clipped child region.
+    // Give it a real ImGui window too: otherwise its InvisibleButtons are clipped
+    // to the Dock child and clicks fall through to friends/channels behind it.
+    const shadow_pad: f32 = 24;
+    const window_x = @max(ctx.win.x, panel.x - shadow_pad);
+    const window_y = @max(ctx.win.y, panel.y - shadow_pad);
+    const window_right = @min(ctx.win.right(), panel.right() + shadow_pad);
+    const window_bottom = @min(ctx.win.bottom(), bg.y - 2);
+    c.ImGui_SetNextWindowPos(d.v(window_x, window_y), 0);
+    c.ImGui_SetNextWindowSize(d.v(window_right - window_x, window_bottom - window_y), 0);
+    _ = c.ImGui_Begin("##dock-folder-popover", null, c.ImGuiWindowFlags_NoDecoration | c.ImGuiWindowFlags_NoBackground |
+        c.ImGuiWindowFlags_NoSavedSettings | c.ImGuiWindowFlags_NoMove | c.ImGuiWindowFlags_NoScrollWithMouse);
+    defer c.ImGui_End();
+    const dl = c.ImGui_GetWindowDrawList();
+
+    d.shadow(dl, panel, radius, 18, ctx.col(.shadow));
+    // overlay is an opaque surface token; do not lower its alpha here.
+    d.rect(dl, panel, ctx.col(.overlay).mix(folder_color, 0.18), radius);
+    d.rect(dl, .{ .x = panel.x + 1, .y = panel.y + 1, .w = panel.w - 2, .h = 58 }, folder_color.alpha(0.10), radius - 1);
+    d.border(dl, panel, ctx.col(.border).mix(folder_color, 0.55).alpha(0.96), radius, 1.2);
+
+    // Pequeno apontador visual liga a bandeja à pasta selecionada no Dock.
+    const pointer_x = std.math.clamp(anchor_x, panel.x + 28, panel.right() - 28);
+    const pointer_tip = bg.y - 4;
+    const pointer_color = ctx.col(.border).mix(folder_color, 0.62);
+    d.line(dl, pointer_x - 8, panel.bottom() - 1, pointer_x, pointer_tip, pointer_color, 2);
+    d.line(dl, pointer_x, pointer_tip, pointer_x + 8, panel.bottom() - 1, pointer_color, 2);
+
+    folderGlyph(dl, panel.x + 34, panel.y + 31, 12, folder_color.mix(d.Rgba.white, 0.22));
+    const title = if (f.name.len > 0) f.name else i18n.tr("Pasta", "Folder");
+    _ = d.textClipped(dl, ctx.ui.get(.bold), 18, panel.x + 58, panel.y + 12, ctx.col(.text), title, panel.w - 116);
+
+    var count_buf: [48]u8 = undefined;
+    const count_label = std.fmt.bufPrint(&count_buf, "{d} {s}", .{
+        visible_count,
+        i18n.tr("servidores", "servers"),
+    }) catch "";
+    d.text(dl, ctx.ui.get(.regular), 12, panel.x + 58, panel.y + 36, ctx.col(.muted), count_label);
+
+    const more: d.Rect = .{ .x = panel.right() - 48, .y = panel.y + 14, .w = 32, .h = 32 };
+    const more_hb = d.hit(ctx, 8900 + @as(usize, @truncate(f.id % 100000)), more);
+    qa.mark(more, "guild-folder-more:{d}", .{f.id});
+    d.rect(dl, more, if (more_hb.hovered) ctx.col(.hover) else ctx.col(.text).alpha(0.055), 16);
+    const dots_color = if (more_hb.hovered) ctx.col(.text) else ctx.col(.muted);
+    d.circle(dl, more.x + 10, more.y + 16, 1.7, dots_color);
+    d.circle(dl, more.x + 16, more.y + 16, 1.7, dots_color);
+    d.circle(dl, more.x + 22, more.y + 16, 1.7, dots_color);
+    if (more_hb.clicked) folderContextMenu(ctx, panel, .guild_folder, f.id);
+    var hovered_name: ?[]const u8 = if (more_hb.hovered and ctx.st.popup == .none)
+        i18n.tr("Opções da pasta", "Folder options")
+    else
+        null;
+
+    d.line(dl, panel.x + 18, panel.y + header_h - 1, panel.right() - 18, panel.y + header_h - 1, ctx.col(.border).alpha(0.8), 1);
+
+    const grid_x = panel.x + (panel.w - grid_w) / 2;
+    const grid_y = panel.y + header_h + 12;
+    const step = tile + gap;
+    var visible_index: usize = 0;
+    for (f.guilds) |gid| {
+        const g = ctx.store.guild(gid) orelse continue;
+        const col = visible_index % columns;
+        const row = visible_index / columns;
+        const index = visible_index;
+        visible_index += 1;
+        const ix = grid_x + @as(f32, @floatFromInt(col)) * step;
+        const iy = grid_y + @as(f32, @floatFromInt(row)) * step;
+        const ir: d.Rect = .{ .x = ix, .y = iy, .w = tile, .h = tile };
+        const hb = d.hit(ctx, 6000 + index, ir);
+        qa.mark(ir, "guild-folder-member:{d}", .{gid});
+        beginDockDrag(ctx, .guild, gid, f.id, hb);
+        const dropped = releaseDockOn(ctx, .{ .guild = .{ .id = gid, .folder = f.id } }, ir, ix + tile / 2, tile);
+        if (hb.clicked and !dropped) ctx.act(.{ .select_guild = gid });
+        if (hb.right) {
+            // Right-clicking a member must not collapse its parent folder.
+            ctx.st.open_folders.clearRetainingCapacity();
+            ctx.st.open_folders.put(ctx.st.gpa, f.id, {}) catch {};
+            folderContextMenu(ctx, panel, .guild, gid);
+        }
+        if (hb.hovered) d.rect(dl, .{ .x = ir.x - 3, .y = ir.y - 3, .w = ir.w + 6, .h = ir.h + 6 }, folder_color.alpha(0.13), w.shapeRadius(shape, tile) + 4);
+        glyph(ctx, dl, g, ix + tile / 2, iy + tile / 2, tile, shape, ctx.st.guild == gid or hb.hovered);
+        if (g.mentions > 0) badge(ctx, dl, ir.right() + 2, ir.y - 2, g.mentions);
+        if (ctx.st.guild == gid) d.circle(dl, ix + tile / 2, ir.bottom() + 3, 2.2, folder_color);
+        if (hb.hovered and ctx.st.popup == .none and ctx.st.dock_drag == null) hovered_name = g.name;
+        if (ctx.st.dock_drag) |drag| {
+            if (drag.moved and !(drag.kind == .guild and drag.id == gid) and
+                ir.contains(ctx.mouse.x, ctx.mouse.y))
+            {
+                dockDropHint(ctx, dl, ir, if (drag.kind == .guild)
+                    dockGuildPlace(ctx.mouse.x, ix + tile / 2, tile)
+                else
+                    .after);
+            }
+        }
+    }
+    // Draw once after ALL icons, in the reserved footer. A tooltip must never
+    // appear behind a neighboring server or steal a click from an icon.
+    if (hovered_name) |label| folderTooltip(ctx, dl, panel, label);
+}
+
+fn folderTooltip(ctx: *d.Ctx, dl: *c.ImDrawList, panel: d.Rect, label: []const u8) void {
+    const fs: f32 = 13;
+    const font = ctx.ui.get(.semibold);
+    const text_w = @min(d.width(font, fs, label), @max(48.0, panel.w - 52));
+    const tip_w = text_w + 24;
+    const tip: d.Rect = .{
+        .x = panel.x + (panel.w - tip_w) / 2,
+        .y = panel.bottom() - 36,
+        .w = tip_w,
+        .h = 28,
+    };
+    d.shadow(dl, tip, 7, 7, ctx.col(.shadow));
+    d.rect(dl, tip, ctx.col(.sidebar), 7);
+    d.border(dl, tip, ctx.col(.border).mix(ctx.col(.text), 0.18), 7, 1);
+    _ = d.textClipped(dl, font, fs, tip.x + 12, tip.y + 6, ctx.col(.text), label, text_w);
+}
+
+/// Dock no estilo do macOS: os ícones crescem perto do mouse; pastas e servidores
+/// são itens de primeira classe e podem ser arrastados para reordenar ou agrupar.
 fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
     const base = @min(d.pnum(n, "size", 40), r.h - 12);
-    var fb: [256]*types.Guild = undefined;
-    const order = flatOrder(ctx, &fb);
+    var rail_items: [256]Store.RailItem = undefined;
+    const order = ctx.store.railOrder(&rail_items);
     const count = order.len + 1;
     const gap: f32 = 10;
     const total = @as(f32, @floatFromInt(count)) * (base + gap) + gap;
-    // Keep the Dock centered when it fits; otherwise make its contents scrollable.
     const available = @max(1, r.w - 16);
     const overflow = total > available;
     const view_w = @min(total, available);
@@ -425,22 +783,18 @@ fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
     const max_scroll = @max(0, total - view_w);
     ctx.st.dock_scroll = std.math.clamp(ctx.st.dock_scroll, 0, max_scroll);
     if (overflow and !ctx.st.settings.open and r.contains(ctx.mouse.x, ctx.mouse.y)) {
-        // A vertical wheel scrolls horizontally; horizontal wheels/trackpads work too.
         const wheel = if (ctx.io.*.MouseWheelH != 0) ctx.io.*.MouseWheelH else ctx.io.*.MouseWheel;
         ctx.st.dock_scroll = std.math.clamp(ctx.st.dock_scroll - wheel * (base + gap) * 2, 0, max_scroll);
     }
     const near = ctx.mouse.y > r.y - 60 and ctx.mouse.y < r.bottom() and ctx.mouse.x > x0 - 40 and ctx.mouse.x < x0 + view_w + 40;
-    // Keep the glass background inside the window while the icons scroll.
     const bg: d.Rect = .{ .x = x0, .y = r.bottom() - base - 16, .w = view_w, .h = base + 14 };
     d.shadow(ctx.dl, bg, 18, 14, ctx.col(.shadow));
     d.rect(ctx.dl, bg, ctx.col(.elevated).alpha(0.85), 18);
     d.border(ctx.dl, bg, ctx.col(.border).mix(ctx.col(.accent), 0.3), 18, 1);
 
-    // Por cima de tudo, menos das configurações (que cobrem a janela).
     const dl = if (ctx.st.settings.open) ctx.dl else ctx.fg;
-    // Clip hit-testing and drawing to the visible Dock area.
     if (overflow) {
-        const clip_min = d.v(bg.x, r.y - base * 2);
+        const clip_min = d.v(bg.x, r.y - base * 4);
         const clip_max = d.v(bg.right(), r.bottom());
         c.ImGui_PushClipRect(clip_min, clip_max, true);
         if (!ctx.st.settings.open) c.ImDrawList_PushClipRect(dl, clip_min, clip_max, true);
@@ -449,48 +803,103 @@ fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
         if (!ctx.st.settings.open) c.ImDrawList_PopClipRect(dl);
         c.ImGui_PopClipRect();
     };
+
+    var open_folder: ?*const types.GuildFolder = null;
+    var open_cx: f32 = 0;
     var x = x0 + gap - ctx.st.dock_scroll;
     for (0..count) |i| {
         const cx = x + base / 2;
-        // Off-screen icons need neither hit boxes nor draw calls.
         if (overflow and (cx + base * 1.7 < bg.x or cx - base * 1.7 > bg.right())) {
             x += base + gap;
             continue;
         }
         const dist = @abs(ctx.mouse.x - cx);
-        const target: f32 = if (near) 1 + 0.65 * @max(0, 1 - dist / 140) else 1;
-        const k = anim.to(anim.id("dock", i), target, 22);
+        const scale: f32 = if (near) 1 + 0.65 * @max(0, 1 - dist / 140) else 1;
+        const k = anim.to(anim.id("dock", i), scale, 22);
         const size = base * k;
         const by = bg.bottom() - 7;
         const ir: d.Rect = .{ .x = cx - size / 2, .y = by - size, .w = size, .h = size };
         const hb = d.hit(ctx, 3000 + i, ir);
-        qa.mark(ir, "guild:{d}", .{if (i == 0) @as(types.Id, 0) else order[i - 1].id});
-        if (i == 0) mascote_pet.anchorIn(.dm_icon, ir, r, ctx.now_ms);
-        const g: ?*types.Guild = if (i == 0) null else order[i - 1];
-        const gid: types.Id = if (g) |x_| x_.id else 0;
-        if (hb.clicked) ctx.act(.{ .select_guild = gid });
-        if (hb.right) if (g) |gg| ctx.popup(.{ .menu = .{ .kind = .guild, .id = gg.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
-        if (g) |gg| {
-            glyph(ctx, dl, gg, cx, ir.y + size / 2, size, shape, true);
-            if (gg.mentions > 0) badge(ctx, dl, ir.right() + 2, ir.y - 2, gg.mentions);
-        } else {
+
+        if (i == 0) {
+            qa.mark(ir, "guild:0", .{});
+            mascote_pet.anchorIn(.dm_icon, ir, r, ctx.now_ms);
+            if (hb.clicked) ctx.act(.{ .select_guild = 0 });
+            if (ctx.st.guild == 0) d.circle(dl, cx, bg.bottom() - 3, 2.5, ctx.col(.accent));
             d.rect(dl, ir, ctx.col(.accent), w.shapeRadius(shape, size));
             const t = "DM";
             const fs = size * 0.34;
             const tw = d.width(ctx.ui.get(.bold), fs, t);
             d.text(dl, ctx.ui.get(.bold), fs, cx - tw / 2, ir.y + size / 2 - fs * 0.62, ctx.col(.accent_text), t);
-        }
-        if (ctx.st.guild == gid) d.circle(dl, cx, bg.bottom() - 3, 2.5, ctx.col(.accent));
-        if (hb.hovered) {
-            const name = if (g) |gg| gg.name else i18n.tr("Mensagens diretas", "Direct Messages");
-            const fs: f32 = 13;
-            const tw = d.width(ctx.ui.get(.semibold), fs, name);
-            const tr: d.Rect = .{ .x = cx - tw / 2 - 10, .y = ir.y - 34, .w = tw + 20, .h = 26 };
-            d.rect(dl, tr, ctx.col(.overlay), 8);
-            d.text(dl, ctx.ui.get(.semibold), fs, tr.x + 10, d.centerY(tr, fs), ctx.col(.text), name);
+            if (hb.hovered) tooltip(ctx, 3000, ir.right() + 12, ir.y + size / 2, i18n.tr("Mensagens diretas", "Direct Messages"), true);
+        } else switch (order[i - 1]) {
+            .guild => |g| {
+                qa.mark(ir, "guild:{d}", .{g.id});
+                beginDockDrag(ctx, .guild, g.id, 0, hb);
+                const dropped = releaseDockOn(ctx, .{ .guild = .{ .id = g.id } }, ir, cx, size);
+                if (hb.clicked and !dropped) ctx.act(.{ .select_guild = g.id });
+                if (hb.right) ctx.popup(.{ .menu = .{ .kind = .guild, .id = g.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
+                glyph(ctx, dl, g, cx, ir.y + size / 2, size, shape, true);
+                if (g.mentions > 0) badge(ctx, dl, ir.right() + 2, ir.y - 2, g.mentions);
+                if (ctx.st.guild == g.id) d.circle(dl, cx, bg.bottom() - 3, 2.5, ctx.col(.accent));
+                if (ctx.st.dock_drag) |drag| {
+                    if (drag.moved and !(drag.kind == .guild and drag.id == g.id) and
+                        ir.contains(ctx.mouse.x, ctx.mouse.y))
+                    {
+                        dockDropHint(ctx, dl, ir, if (drag.kind == .guild)
+                            dockGuildPlace(ctx.mouse.x, cx, size)
+                        else
+                            if (ctx.mouse.x < cx) .before else .after);
+                    }
+                }
+                if (hb.hovered) tooltip(ctx, 3000 + i, ir.right() + 12, ir.y + size / 2, g.name, true);
+            },
+            .folder => |f| {
+                qa.mark(ir, "guild-folder:{d}", .{f.id});
+                beginDockDrag(ctx, .folder, f.id, 0, hb);
+                const dropped = releaseDockOn(ctx, .{ .folder = f.id }, ir, cx, size);
+                if (hb.clicked and !dropped) {
+                    if (ctx.st.open_folders.contains(f.id)) {
+                        _ = ctx.st.open_folders.remove(f.id);
+                    } else {
+                        ctx.st.open_folders.clearRetainingCapacity();
+                        ctx.st.open_folders.put(ctx.st.gpa, f.id, {}) catch {};
+                    }
+                }
+                if (hb.right) ctx.popup(.{ .menu = .{ .kind = .guild_folder, .id = f.id, .x = ctx.mouse.x, .y = ctx.mouse.y } });
+                var selected = false;
+                for (f.guilds) |gid| if (ctx.st.guild == gid) {
+                    selected = true;
+                    break;
+                };
+                dockFolderIcon(ctx, dl, f, ir, shape, selected);
+                if (ctx.st.dock_drag) |drag| {
+                    if (drag.moved and !(drag.kind == .folder and drag.id == f.id) and
+                        ir.contains(ctx.mouse.x, ctx.mouse.y))
+                    {
+                        dockDropHint(ctx, dl, ir, if (drag.kind == .guild)
+                            .inside
+                        else if (ctx.mouse.x < cx)
+                            .before
+                        else
+                            .after);
+                    }
+                }
+                const label = if (f.name.len > 0) f.name else i18n.tr("Pasta", "Folder");
+                if (hb.hovered) tooltip(ctx, @truncate(f.id *% 13 +% 7000), ir.right() + 12, ir.y + size / 2, label, true);
+                if ((ctx.st.open_folders.contains(f.id) or popupBelongsToFolder(ctx, f)) and open_folder == null) {
+                    open_folder = f;
+                    open_cx = cx;
+                }
+            },
         }
         x += base + gap;
     }
+
+    // Conteúdo da pasta fica numa janela flutuante; a linha principal do Dock
+    // não cresce nem se mistura com os servidores que estão dentro da pasta.
+    if (open_folder) |f| folderPopover(ctx, f, open_cx, r, bg, base, shape);
+    if (c.ImGui_IsMouseReleased(0)) ctx.st.dock_drag = null;
 }
 
 /// Lista vertical com ícone + nome (estilo "workspaces" do Slack).
