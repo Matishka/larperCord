@@ -594,11 +594,19 @@ fn menu(ctx: *d.Ctx, kind: state.MenuKind, id: Id, x: f32, y: f32) void {
     const acc_h: f32 = if (kind == .status) accounts_menu.height(ctx) else 0;
     const leave_footer_h: f32 = if (guild_can_leave) 44 else 0;
     const mh = quick_h + @as(f32, @floatFromInt(n)) * row_h + seps + colors_h + leave_footer_h + 12 + acc_h;
-    // Janela baixa (ou a interface grande): o menu para na altura da janela e os
-    // itens rolam por dentro (as reações rápidas ficam paradas em cima).
-    const max_h = @max(ctx.win.h - 16, quick_h + 3 * row_h + 12);
+    // The Cupertino Dock floats above the bottom of the app. Guild context
+    // menus must stop ABOVE it; otherwise the fixed "Leave Server" footer is
+    // technically in the menu but visually covered by Dock icons.
+    const dock_inset: f32 = if (kind == .guild and std.mem.eql(u8, ctx.theme_name, "cupertino")) 84 else 0;
+    const max_h = @max(96.0, ctx.win.h - 16 - dock_inset);
     const scrolls = mh > max_h;
-    const r = fit(ctx, x + 2, y + 2 - acc_h, mw, @min(mh, max_h));
+    const fitted = fit(ctx, x + 2, y + 2 - acc_h, mw, @min(mh, max_h));
+    const r: d.Rect = if (dock_inset > 0) .{
+        .x = fitted.x,
+        .y = @max(ctx.win.y + 8, @min(fitted.y, ctx.win.bottom() - dock_inset - 8 - fitted.h)),
+        .w = fitted.w,
+        .h = fitted.h,
+    } else fitted;
     const k = anim.to(anim.id("menu", @intFromEnum(kind)), 1, 30);
     const dl = beginWindow("##menu", r);
     defer c.ImGui_End();
