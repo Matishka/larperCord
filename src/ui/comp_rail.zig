@@ -95,8 +95,12 @@ fn folder(ctx: *d.Ctx, dl: *c.ImDrawList, f: *const types.GuildFolder, cx: f32, 
         // Até 4 ícones pequenos, 2×2.
         const ms = size * 0.36;
         const off = ms / 2 + 2;
-        for (f.guilds[0..@min(f.guilds.len, 4)], 0..) |gid, i| {
+        var mini_i: usize = 0;
+        for (f.guilds) |gid| {
+            if (mini_i >= 4) break;
             const g = ctx.store.guild(gid) orelse continue;
+            const i = mini_i;
+            mini_i += 1;
             const mx = cx + (if (i % 2 == 0) -off else off);
             const my = y + size / 2 + (if (i / 2 == 0) -off else off);
             glyph(ctx, dl, g, mx, my, ms, shape, false);
@@ -554,8 +558,12 @@ fn dockFolderIcon(ctx: *d.Ctx, dl: *c.ImDrawList, f: *const types.GuildFolder, i
     } else {
         const ms = ir.w * 0.34;
         const off = ms * 0.48;
-        for (f.guilds[0..@min(f.guilds.len, 4)], 0..) |gid, i| {
+        var mini_i: usize = 0;
+        for (f.guilds) |gid| {
+            if (mini_i >= 4) break;
             const g = ctx.store.guild(gid) orelse continue;
+            const i = mini_i;
+            mini_i += 1;
             const mx = ir.x + ir.w / 2 + (if (i % 2 == 0) -off else off);
             const my = ir.y + ir.h / 2 + (if (i / 2 == 0) -off else off);
             glyph(ctx, dl, g, mx, my, ms, shape, false);
@@ -610,13 +618,19 @@ fn folderPopover(
     base: f32,
     shape: w.Shape,
 ) void {
-    if (f.guilds.len == 0) return;
+    // Discord may still reference a guild after we leave it. Only lay out
+    // guilds that are present locally; do not mutate/sync the saved folder here.
+    var visible_count: usize = 0;
+    for (f.guilds) |gid| {
+        if (ctx.store.guild(gid) != null) visible_count += 1;
+    }
+    if (visible_count == 0) return;
 
     const tile = @min(52.0, @max(44.0, base * 1.2));
     const gap: f32 = 10;
     const padding: f32 = 20;
-    const columns: usize = if (f.guilds.len <= 3) f.guilds.len else if (f.guilds.len <= 6) 3 else 6;
-    const rows = (f.guilds.len + columns - 1) / columns;
+    const columns: usize = if (visible_count <= 3) visible_count else if (visible_count <= 6) 3 else 6;
+    const rows = (visible_count + columns - 1) / columns;
     const grid_w = @as(f32, @floatFromInt(columns)) * tile + @as(f32, @floatFromInt(columns - 1)) * gap;
     const grid_h = @as(f32, @floatFromInt(rows)) * tile + @as(f32, @floatFromInt(rows - 1)) * gap;
     const desired_w = @max(248.0, grid_w + padding * 2);
@@ -670,7 +684,7 @@ fn folderPopover(
 
     var count_buf: [48]u8 = undefined;
     const count_label = std.fmt.bufPrint(&count_buf, "{d} {s}", .{
-        f.guilds.len,
+        visible_count,
         i18n.tr("servidores", "servers"),
     }) catch "";
     d.text(dl, ctx.ui.get(.regular), 12, panel.x + 58, panel.y + 36, ctx.col(.muted), count_label);
@@ -694,14 +708,17 @@ fn folderPopover(
     const grid_x = panel.x + (panel.w - grid_w) / 2;
     const grid_y = panel.y + header_h + 12;
     const step = tile + gap;
-    for (f.guilds, 0..) |gid, j| {
+    var visible_index: usize = 0;
+    for (f.guilds) |gid| {
         const g = ctx.store.guild(gid) orelse continue;
-        const col = j % columns;
-        const row = j / columns;
+        const col = visible_index % columns;
+        const row = visible_index / columns;
+        const index = visible_index;
+        visible_index += 1;
         const ix = grid_x + @as(f32, @floatFromInt(col)) * step;
         const iy = grid_y + @as(f32, @floatFromInt(row)) * step;
         const ir: d.Rect = .{ .x = ix, .y = iy, .w = tile, .h = tile };
-        const hb = d.hit(ctx, 6000 + j, ir);
+        const hb = d.hit(ctx, 6000 + index, ir);
         qa.mark(ir, "guild-folder-member:{d}", .{gid});
         beginDockDrag(ctx, .guild, gid, f.id, hb);
         const dropped = releaseDockOn(ctx, .{ .guild = .{ .id = gid, .folder = f.id } }, ir, ix + tile / 2, tile);
