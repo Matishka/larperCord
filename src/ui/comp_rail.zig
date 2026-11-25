@@ -617,6 +617,9 @@ fn folderPopover(
     bg: d.Rect,
     base: f32,
     shape: w.Shape,
+    openness: f32,
+    interactive: bool,
+    icons_animate: bool,
 ) void {
     // Discord may still reference a guild after we leave it. Only lay out
     // guilds that are present locally; do not mutate/sync the saved folder here.
@@ -645,7 +648,9 @@ fn folderPopover(
     // forcing the panel below the Dock, where most of it became invisible.
     const min_y = ctx.win.y + 12;
     const max_y = @max(min_y, ctx.win.bottom() - panel_h - 12);
-    const panel_y = std.math.clamp(bg.y - panel_h - 12, min_y, max_y);
+    // Float upward into place. Keep all hit rectangles aligned with the drawn
+    // surface: this is a real interactive ImGui window, not a visual-only layer.
+    const panel_y = std.math.clamp(bg.y - panel_h - 12, min_y, max_y) + (1 - openness) * 12;
     const panel: d.Rect = .{ .x = panel_x, .y = panel_y, .w = panel_w, .h = panel_h };
     const folder_color = if (f.color != 0) d.Rgba.hex(f.color) else ctx.col(.accent);
     const radius: f32 = 20;
@@ -697,8 +702,8 @@ fn folderPopover(
     d.circle(dl, more.x + 10, more.y + 16, 1.7, dots_color);
     d.circle(dl, more.x + 16, more.y + 16, 1.7, dots_color);
     d.circle(dl, more.x + 22, more.y + 16, 1.7, dots_color);
-    if (more_hb.clicked) folderContextMenu(ctx, panel, .guild_folder, f.id);
-    var hovered_name: ?[]const u8 = if (more_hb.hovered and ctx.st.popup == .none)
+    if (interactive and more_hb.clicked) folderContextMenu(ctx, panel, .guild_folder, f.id);
+    var hovered_name: ?[]const u8 = if (interactive and more_hb.hovered and ctx.st.popup == .none)
         i18n.tr("Opções da pasta", "Folder options")
     else
         null;
@@ -720,20 +725,25 @@ fn folderPopover(
         const ir: d.Rect = .{ .x = ix, .y = iy, .w = tile, .h = tile };
         const hb = d.hit(ctx, 6000 + index, ir);
         qa.mark(ir, "guild-folder-member:{d}", .{gid});
-        beginDockDrag(ctx, .guild, gid, f.id, hb);
-        const dropped = releaseDockOn(ctx, .{ .guild = .{ .id = gid, .folder = f.id } }, ir, ix + tile / 2, tile);
-        if (hb.clicked and !dropped) ctx.act(.{ .select_guild = gid });
-        if (hb.right) {
+        if (interactive) beginDockDrag(ctx, .guild, gid, f.id, hb);
+        const dropped = if (interactive) releaseDockOn(ctx, .{ .guild = .{ .id = gid, .folder = f.id } }, ir, ix + tile / 2, tile) else false;
+        if (interactive and hb.clicked and !dropped) ctx.act(.{ .select_guild = gid });
+        if (interactive and hb.right) {
             // Right-clicking a member must not collapse its parent folder.
             ctx.st.open_folders.clearRetainingCapacity();
             ctx.st.open_folders.put(ctx.st.gpa, f.id, {}) catch {};
             folderContextMenu(ctx, panel, .guild, gid);
         }
         if (hb.hovered) d.rect(dl, .{ .x = ir.x - 3, .y = ir.y - 3, .w = ir.w + 6, .h = ir.h + 6 }, folder_color.alpha(0.13), w.shapeRadius(shape, tile) + 4);
-        glyph(ctx, dl, g, ix + tile / 2, iy + tile / 2, tile, shape, ctx.st.guild == gid or hb.hovered);
+        // Subtle stagger: each icon grows to its normal size after the tray
+        // has started opening. All icons remain in their normal hit rectangles.
+        const delay = @as(f32, @floatFromInt(@min(index, 7))) * 0.06;
+        const icon_phase = if (icons_animate) std.math.clamp((openness - delay) / @max(0.25, 1 - delay), 0.0, 1.0) else 1.0;
+        const icon_size = tile * (0.86 + 0.14 * icon_phase);
+        glyph(ctx, dl, g, ix + tile / 2, iy + tile / 2, icon_size, shape, ctx.st.guild == gid or hb.hovered);
         if (g.mentions > 0) badge(ctx, dl, ir.right() + 2, ir.y - 2, g.mentions);
         if (ctx.st.guild == gid) d.circle(dl, ix + tile / 2, ir.bottom() + 3, 2.2, folder_color);
-        if (hb.hovered and ctx.st.popup == .none and ctx.st.dock_drag == null) hovered_name = g.name;
+        if (interactive and hb.hovered and ctx.st.popup == .none and ctx.st.dock_drag == null) hovered_name = g.name;
         if (ctx.st.dock_drag) |drag| {
             if (drag.moved and !(drag.kind == .guild and drag.id == gid) and
                 ir.contains(ctx.mouse.x, ctx.mouse.y))
@@ -770,6 +780,14 @@ fn folderTooltip(ctx: *d.Ctx, dl: *c.ImDrawList, panel: d.Rect, label: []const u
 /// Dock no estilo do macOS: os ícones crescem perto do mouse; pastas e servidores
 /// são itens de primeira classe e podem ser arrastados para reordenar ou agrupar.
 fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
+    // These are KDL-level defaults. The user's chosen Cupertino preset:
+    // balanced motion, 70% magnification, animated tray/icons and scrolling.
+    const motion = d.pstr(n, "motion", "balanced");
+    const folder_speed: f32 = if (std.mem.eql(u8, motion, "fast")) 28 else if (std.mem.eql(u8, motion, "slow")) 12 else 19;
+    const magnify = std.math.clamp(d.pnum(n, "magnify", 0.70), 0.0, 1.0);
+    const open_anim = d.pflag(n, "open-animation", true);
+    const icons_anim = d.pflag(n, "icons-animation", true);
+    const smooth_scroll = d.pflag(n, "smooth-scroll", true);
     const base = @min(d.pnum(n, "size", 40), r.h - 12);
     var rail_items: [256]Store.RailItem = undefined;
     const order = ctx.store.railOrder(&rail_items);
@@ -787,6 +805,12 @@ fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
         ctx.st.dock_scroll = std.math.clamp(ctx.st.dock_scroll - wheel * (base + gap) * 2, 0, max_scroll);
     }
     const near = ctx.mouse.y > r.y - 60 and ctx.mouse.y < r.bottom() and ctx.mouse.x > x0 - 40 and ctx.mouse.x < x0 + view_w + 40;
+    // Store retains the requested wheel position; only the visual position
+    // eases, so the existing ordering/dragging model is unchanged.
+    const displayed_scroll = if (smooth_scroll)
+        anim.to(anim.id("dock-scroll", 0), ctx.st.dock_scroll, folder_speed * 1.25)
+    else
+        ctx.st.dock_scroll;
     const bg: d.Rect = .{ .x = x0, .y = r.bottom() - base - 16, .w = view_w, .h = base + 14 };
     d.shadow(ctx.dl, bg, 18, 14, ctx.col(.shadow));
     d.rect(ctx.dl, bg, ctx.col(.elevated).alpha(0.85), 18);
@@ -806,7 +830,9 @@ fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
 
     var open_folder: ?*const types.GuildFolder = null;
     var open_cx: f32 = 0;
-    var x = x0 + gap - ctx.st.dock_scroll;
+    var open_progress: f32 = 0;
+    var open_interactive = false;
+    var x = x0 + gap - displayed_scroll;
     for (0..count) |i| {
         const cx = x + base / 2;
         if (overflow and (cx + base * 1.7 < bg.x or cx - base * 1.7 > bg.right())) {
@@ -814,7 +840,7 @@ fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
             continue;
         }
         const dist = @abs(ctx.mouse.x - cx);
-        const scale: f32 = if (near) 1 + 0.65 * @max(0, 1 - dist / 140) else 1;
+        const scale: f32 = if (near) 1 + magnify * @max(0, 1 - dist / 140) else 1;
         const k = anim.to(anim.id("dock", i), scale, 22);
         const size = base * k;
         const by = bg.bottom() - 7;
@@ -887,9 +913,17 @@ fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
                 }
                 const label = if (f.name.len > 0) f.name else i18n.tr("Pasta", "Folder");
                 if (hb.hovered) tooltip(ctx, @truncate(f.id *% 13 +% 7000), ir.right() + 12, ir.y + size / 2, label, true);
-                if ((ctx.st.open_folders.contains(f.id) or popupBelongsToFolder(ctx, f)) and open_folder == null) {
+                const folder_is_open = ctx.st.open_folders.contains(f.id) or popupBelongsToFolder(ctx, f);
+                // Evaluate the hidden (closed) state every frame as well, so
+                // opening starts at 0 rather than snapping to 1 on first use.
+                const progress = if (open_anim)
+                    anim.to(anim.id("dock-folder-popup", f.id), if (folder_is_open) 1 else 0, folder_speed)
+                else if (folder_is_open) @as(f32, 1) else @as(f32, 0);
+                if (progress > 0.01 and open_folder == null) {
                     open_folder = f;
                     open_cx = cx;
+                    open_progress = progress;
+                    open_interactive = folder_is_open;
                 }
             },
         }
@@ -898,7 +932,7 @@ fn dock(ctx: *d.Ctx, n: *const kdl.Node, r: d.Rect, shape: w.Shape) void {
 
     // Conteúdo da pasta fica numa janela flutuante; a linha principal do Dock
     // não cresce nem se mistura com os servidores que estão dentro da pasta.
-    if (open_folder) |f| folderPopover(ctx, f, open_cx, r, bg, base, shape);
+    if (open_folder) |f| folderPopover(ctx, f, open_cx, r, bg, base, shape, open_progress, open_interactive, icons_anim and open_anim);
     if (c.ImGui_IsMouseReleased(0)) ctx.st.dock_drag = null;
 }
 
