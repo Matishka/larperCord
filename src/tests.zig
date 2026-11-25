@@ -121,6 +121,7 @@ test {
     _ = @import("net/proxy.zig");
     _ = @import("net/challenge.zig");
     _ = @import("net/settings_proto.zig");
+    _ = @import("net/stream_keys.zig");
     _ = @import("net/status_proto.zig");
     _ = @import("net/conta_json.zig");
     _ = @import("net/thread_json.zig");
