@@ -3,7 +3,7 @@ name: Build larperCord Discord-Synced Dock Folders for Windows
 
 on:
   push:
-    branches: [main, feat/discord-synced-dock-folders]
+    branches: [main, feat/discord-synced-dock-folders, feat/go-live-screenshare]
     paths:
       - '.github/workflows/build-dock-scroll.yml'
       - 'src/ui/comp_rail.zig'
