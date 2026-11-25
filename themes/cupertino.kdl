@@ -126,7 +126,7 @@ layout {
                     }
                 }
             }
-            guild-bar height=72 variant=dock size=40 shape=squircle icon-style=fill when=dock c-elevated="alpha(@surface, 0.55)" c-border="alpha(white, 0.28)" cl-elevated="alpha(white, 0.55)"
+            guild-bar height=72 variant=dock size=40 shape=squircle icon-style=fill when=dock motion="balanced" magnify=0.70 open-animation=#true icons-animation=#true smooth-scroll=#true c-elevated="alpha(@surface, 0.55)" c-border="alpha(white, 0.28)" cl-elevated="alpha(white, 0.55)"
         }
     }
 }
